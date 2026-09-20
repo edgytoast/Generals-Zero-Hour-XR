@@ -1,0 +1,83 @@
+# XcodeGen spec for the native visionOS shell of Generals: Zero Hour XR.
+#
+#   xcodegen generate --spec visionos/project.yml   (build-shell.sh does this)
+#
+# The generated GeneralsZHXR.xcodeproj is a build artifact and is git-ignored.
+# Signing is intentionally NOT configured here: the simulator build needs none,
+# the unsigned device compile passes CODE_SIGNING_ALLOWED=NO, and a real device
+# build takes DEVELOPMENT_TEAM from the environment / local Xcode settings.
+name: GeneralsZHXR
+options:
+  bundleIdPrefix: com.generalsx.zerohour.xr
+  createIntermediateGroups: true
+  developmentLanguage: en
+  deploymentTarget:
+    visionOS: "26.0"
+  generateEmptyDirectories: false
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    CLANG_CXX_LANGUAGE_STANDARD: "c++20"
+    CLANG_ENABLE_OBJC_ARC: YES
+    CLANG_ENABLE_MODULES: YES
+    GCC_C_LANGUAGE_STANDARD: gnu17
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  GeneralsZHXR:
+    type: application
+    platform: visionOS
+    sources:
+      - path: App
+      - path: Bridge
+      - path: Renderer
+      - path: Input
+      - path: Platform
+        buildPhase: none        # headers only; referenced through HEADER_SEARCH_PATHS
+      - path: Resources
+        excludes:
+          - Info.plist
+    settings:
+      base:
+        PRODUCT_NAME: GeneralsZHXR
+        PRODUCT_BUNDLE_IDENTIFIER: com.generalsx.zerohour.xr.vision
+        SDKROOT: xros
+        SUPPORTED_PLATFORMS: "xros xrsimulator"
+        TARGETED_DEVICE_FAMILY: "7"
+        SWIFT_OBJC_BRIDGING_HEADER: App/GeneralsZHXR-Bridging-Header.h
+        HEADER_SEARCH_PATHS:
+          - $(SRCROOT)/App
+          - $(SRCROOT)/Bridge
+          - $(SRCROOT)/Renderer
+          - $(SRCROOT)/Input
+          - $(SRCROOT)/Platform
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_FILE: Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        MTL_ENABLE_DEBUG_INFO: INCLUDE_SOURCE
+        OTHER_LDFLAGS:
+          - -framework
+          - CompositorServices
+          - -framework
+          - ARKit
+          - -framework
+          - Metal
+    info:
+      path: Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Generals ZH XR
+        CFBundleName: GeneralsZHXR
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UIApplicationSceneManifest:
+          UIApplicationPreferredDefaultSceneSessionRole: UIWindowSceneSessionRoleApplication
+          UIApplicationSupportsMultipleScenes: true
+          UISceneConfigurations: {}
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        NSHandsTrackingUsageDescription: "Hand tracking lets you pinch, drag and use both hands to move and scale the tabletop battlefield."
+        NSWorldSensingUsageDescription: "World sensing places the battlefield in front of you and keeps it fixed in your room."
+        UIRequiredDeviceCapabilities:
+          - arm64
