@@ -33,6 +33,7 @@ struct GameDataPaths: Equatable, Sendable {
     var source: GameDataSource
     var isComplete: Bool
     var languages: [String]
+    var optionalNotes: [String] = []
     var bytes: UInt64
     var baseMerged: Bool { zhRoot == baseRoot }
 }

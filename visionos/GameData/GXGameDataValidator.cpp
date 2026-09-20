@@ -453,7 +453,9 @@ std::string Report::summary() const {
             if (!weatherFound) o << "\nMissing: Data/INI/Default/Weather.ini";
             if (!languageFound) o << "\nMissing: Zero Hour language text (Data/<Language>/generals.csf or .str)";
             for (const auto& w : warnings) o << "\nNote: " << w;
-            for (const auto& s : optionalMissing) o << "\nOptional: " << s;
+            if (ready()) {
+                for (const auto& s : optionalMissing) o << "\nOptional: " << s;
+            }
             o << "\nArchive size: " << FormatBytes(totalBytesEstimate());
             if (ready()) o << (complete() ? "\nReady (complete data set)." : "\nReady (minimal data set).");
             break;

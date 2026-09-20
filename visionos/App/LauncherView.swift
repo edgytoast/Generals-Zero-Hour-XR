@@ -263,6 +263,9 @@ private struct ReadyView: View {
                 }
                 Text(details).font(.caption).foregroundStyle(.secondary)
             }
+            ForEach(paths.optionalNotes, id: \.self) { note in
+                Label(note, systemImage: "info.circle").font(.footnote).foregroundStyle(.secondary)
+            }
             if paths.source == .imported {
                 Button(role: .destructive) { model.confirmRemoveImported = true } label: {
                     Label("Remove imported data", systemImage: "trash")

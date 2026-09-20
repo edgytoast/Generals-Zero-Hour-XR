@@ -208,6 +208,7 @@ extension AppModel {
             source: source,
             isComplete: report.isComplete,
             languages: report.languages,
+            optionalNotes: report.optionalMissing,
             bytes: installed?.bytes ?? report.totalBytesEstimate)
         if source == .sharedDocuments { GXGameDataService.excludeFromBackup(atPath: GXGameDataService.sharedDocumentsPath()) }
         UserDefaults.standard.set(source.rawValue, forKey: Keys.activeSource)
