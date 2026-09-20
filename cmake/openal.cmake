@@ -29,10 +29,32 @@ if(SAGE_USE_OPENAL)
 
     include(FetchContent)
 
+    set(_openal_patch_args)
+    if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+        # GeneralsX @build visionOS port: openal-soft 1.24.2 does not know visionOS.
+        # Two one-line fixes, stored as cmake/patches/openal-soft-1.24.2-visionos.patch:
+        #  - alc/backends/coreaudio.cpp includes IOKit/audio/IOAudioTypes.h unless
+        #    TARGET_OS_IOS/TARGET_OS_TV; that header does not exist in the xros SDKs
+        #    (add TARGET_OS_VISION so device enumeration is compiled out).
+        #  - CMakeLists.txt links -framework AudioUnit,ApplicationServices (macOS
+        #    only) unless the system name is iOS/tvOS; add visionOS to that regex.
+        set(_openal_patch_args PATCH_COMMAND ${CMAKE_COMMAND}
+            "-DPATCH_FILE=${CMAKE_SOURCE_DIR}/cmake/patches/openal-soft-1.24.2-visionos.patch"
+            -P "${CMAKE_SOURCE_DIR}/cmake/patches/apply-patch.cmake")
+        # A static archive is what the host app links (openal-soft defaults to
+        # SHARED unless LIBTYPE says otherwise).
+        set(LIBTYPE STATIC)
+        # RTKit (realtime thread priority through D-Bus) is a Linux feature. Left ON,
+        # openal-soft picks up whatever dbus pkg-config finds on the BUILD HOST (Homebrew's
+        # dbus, a macOS library) and compiles against its headers.
+        set(ALSOFT_RTKIT OFF CACHE BOOL "No RTKit/D-Bus on visionOS" FORCE)
+    endif()
+
     FetchContent_Declare(
         openal_soft
         URL "https://github.com/kcat/openal-soft/archive/refs/tags/1.24.2.tar.gz"
         URL_HASH "SHA256=7efd383d70508587fbc146e4c508771a2235a5fc8ae05bf6fe721c20a348bd7c"
+        ${_openal_patch_args}
     )
 
     # Minimal build: no utilities, examples, or tests

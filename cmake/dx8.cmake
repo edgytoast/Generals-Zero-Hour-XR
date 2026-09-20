@@ -28,6 +28,30 @@ if(SAGE_USE_DX8)
   FetchContent_MakeAvailable(dx8)
   message(STATUS "Using DirectX 8 SDK (Windows native)")
 
+elseif(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+  # GeneralsX @build visionOS port: HEADERS ONLY. The engine renders through its
+  # own D3D8 -> GLES3 backend (Core/Libraries/Source/d3d8gles) running on ANGLE's
+  # Metal backend, so DXVK itself is never built: no meson, no MoltenVK, no Vulkan
+  # SDK, no glslang, no dxvk-{ios,android}.patch. Only the fork's Wine-style D3D8
+  # headers are needed at compile time (see cmake/dxvk-headers.cmake).
+  #
+  # DXVK_HEADERS_REF must equal the gitlink of references/fbraz3-dxvk (the fork
+  # revision every other platform builds from); a mismatch is reported below.
+  set(DXVK_HEADERS_REF "46a3bc018bcae408d49d3c500e4e536a11f6789a")
+  include(${CMAKE_CURRENT_LIST_DIR}/dxvk-headers.cmake)
+  gx_fetch_dxvk_headers(DXVK_HEADERS_DIR "${DXVK_HEADERS_REF}")
+  execute_process(
+    COMMAND git -C "${CMAKE_SOURCE_DIR}" ls-files -s references/fbraz3-dxvk
+    OUTPUT_VARIABLE DXVK_GITLINK OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  if(DXVK_GITLINK MATCHES "^160000 ([0-9a-f]+)" AND NOT CMAKE_MATCH_1 STREQUAL DXVK_HEADERS_REF)
+    message(WARNING "cmake/dx8.cmake DXVK_HEADERS_REF (${DXVK_HEADERS_REF}) differs from the references/fbraz3-dxvk gitlink (${CMAKE_MATCH_1}); update DXVK_HEADERS_REF.")
+  endif()
+  # Same variables the Android/macOS source builds export; CompatLib's
+  # `if(APPLE OR ANDROID)` include-path branch consumes dxvk_SOURCE_DIR.
+  set(dxvk_SOURCE_DIR "${DXVK_HEADERS_DIR}" CACHE PATH "DXVK fork header checkout (visionOS: headers only)")
+  set(DXVK_INCLUDE_DIR "${DXVK_HEADERS_DIR}/include/native" CACHE PATH "DXVK native headers")
+  message(STATUS "DXVK headers (visionOS, no DXVK build): ${dxvk_SOURCE_DIR}")
+
 elseif(APPLE AND SAGE_USE_MOLTENVK)
   # macOS: Build DXVK 2.6 from source using Meson + MoltenVK
   # GeneralsX @build BenderAI 24/02/2026 - Phase 5 macOS port (Session 61)
