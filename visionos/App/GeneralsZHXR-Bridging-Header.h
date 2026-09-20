@@ -4,3 +4,5 @@
 #import "GXXRBridge.h"
 #import "GXXRInput.h"
 #import "PlatformLifecycle.h"
+// Game-data detection/import (package G). Relative import: no extra header search path needed.
+#import "../GameData/GXGameDataService.h"
