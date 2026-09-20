@@ -69,11 +69,16 @@ fragment float4 ground_fragment(SceneVertexOut in [[stage_in]],
     return float4(rgb * a, a);
 }
 
-// --- Composite: external per-eye texture -> drawable ------------------------
+// --- Composite: external texture -> drawable ---------------------------------
 
 struct CompositeOut {
     float4 position [[position]];
     float2 uv;
+};
+
+struct CompositeFragOut {
+    float4 color [[color(0)]];
+    float depth [[depth(any)]];
 };
 
 vertex CompositeOut composite_vertex(uint vid [[vertex_id]]) {
@@ -85,13 +90,57 @@ vertex CompositeOut composite_vertex(uint vid [[vertex_id]]) {
     return out;
 }
 
-fragment float4 composite_fragment(CompositeOut in [[stage_in]],
-                                   texture2d<float> source [[texture(0)]],
-                                   constant GXXRCompositeParams& params [[buffer(GXXRBufferIndexCompositeParams)]]) {
+// Samples a client texture and returns LINEAR, PREMULTIPLIED color (what the sRGB drawable wants).
+static float4 sampleClient(texture2d<float> source, float2 uv, constant GXXRCompositeParams& params) {
     constexpr sampler s(filter::linear, address::clamp_to_edge);
-    float2 uv = in.uv;
     if (params.flags & GXXR_COMPOSITE_FLIP_Y) uv.y = 1.0 - uv.y;
+    uv = params.uvRect.xy + uv * params.uvRect.zw;
     float4 c = source.sample(s, uv);
-    if (params.flags & GXXR_COMPOSITE_PREMULTIPLY) c.rgb *= c.a;
+    const bool straightAlpha = (params.flags & GXXR_COMPOSITE_PREMULTIPLY) != 0;
+    if (params.flags & GXXR_COMPOSITE_SRGB_DECODE) {
+        float3 straight = straightAlpha ? c.rgb : (c.a > 1e-5 ? c.rgb / c.a : float3(0.0));
+        c.rgb = srgbToLinear(saturate(straight));
+        if (!straightAlpha) c.rgb *= c.a;
+    }
+    if (straightAlpha) c.rgb *= c.a;
+    return c;
+}
+
+fragment CompositeFragOut composite_fragment(CompositeOut in [[stage_in]],
+                                             texture2d<float> source [[texture(0)]],
+                                             constant GXXRCompositeParams& params [[buffer(GXXRBufferIndexCompositeParams)]]) {
+    float4 c = sampleClient(source, in.uv, params);
+    // Transparent pixels must keep depth 0 (far) so passthrough shows and the compositor does
+    // not treat them as geometry.
+    if (c.a < 1e-4) discard_fragment();
+    CompositeFragOut out;
+    out.color = c;
+    out.depth = params.depth;
+    return out;
+}
+
+// --- World-anchored quad layer -------------------------------------------------
+
+struct LayerOut {
+    float4 position [[position]];
+    float2 uv;
+};
+
+vertex LayerOut layer_vertex(uint vid [[vertex_id]],
+                             constant GXXRLayerUniforms& u [[buffer(GXXRBufferIndexUniforms)]]) {
+    // Triangle strip: (-,+) (+,+) (-,-) (+,-); uv (0,0) is the top-left of the texture image.
+    const float2 corner = float2((vid & 1) ? 1.0 : -1.0, (vid & 2) ? -1.0 : 1.0);
+    LayerOut out;
+    float4 world = u.worldFromQuad * float4(corner * u.halfSize, 0.0, 1.0);
+    out.position = u.clipFromWorld * world;
+    out.uv = float2(corner.x * 0.5 + 0.5, 0.5 - corner.y * 0.5);
+    return out;
+}
+
+fragment float4 layer_fragment(LayerOut in [[stage_in]],
+                               texture2d<float> source [[texture(0)]],
+                               constant GXXRCompositeParams& params [[buffer(GXXRBufferIndexCompositeParams)]]) {
+    float4 c = sampleClient(source, in.uv, params);
+    if (c.a < 1e-3) discard_fragment();  // keep depth for translucent-but-visible pixels only
     return c;
 }
