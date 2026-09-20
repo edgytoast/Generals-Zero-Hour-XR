@@ -80,6 +80,7 @@ extension AppModel {
     }
 
     private func acquire(_ url: URL) {
+        guard !heldScopes.contains(where: { $0.path == url.path }) else { return }
         if url.startAccessingSecurityScopedResource() { heldScopes.append(url) }
     }
 
@@ -212,6 +213,7 @@ extension AppModel {
             bytes: installed?.bytes ?? report.totalBytesEstimate)
         if source == .sharedDocuments { GXGameDataService.excludeFromBackup(atPath: GXGameDataService.sharedDocumentsPath()) }
         UserDefaults.standard.set(source.rawValue, forKey: Keys.activeSource)
+        rejectedSelection = nil
         setGameData(.ready(paths))
     }
 
@@ -241,7 +243,10 @@ extension AppModel {
         guard !isGameDataBusy else { return }
         notice(nil)
         awaitingBaseFolder = false
-        releaseScopes()
+        rejectedSelection = nil
+        var previous: GameDataPaths?
+        if case .ready(let p) = gameData { previous = p }
+        releaseScopes(keeping: previous?.source == .inPlace ? heldScopes : [])
         acquire(url)
         if let baseURL { acquire(baseURL) }
         validationSubject = url.lastPathComponent
@@ -260,8 +265,14 @@ extension AppModel {
                 let offerBase = !report.zhRoot.isEmpty && report.baseFolderMissing && baseURL == nil
                 self.firstPick = offerBase ? url : nil
                 self.awaitingBaseFolder = offerBase
-                self.releaseScopes(keeping: offerBase ? [url] : [])
-                self.setGameData(.invalid(report))
+                self.releaseScopes(keeping: (offerBase ? [url] : []) + (previous?.source == .inPlace ? self.heldScopes.filter { $0.path != url.path } : []))
+                if let previous {
+                    // A wrong pick must not discard data that already works.
+                    self.rejectedSelection = report
+                    self.setGameData(.ready(previous))
+                } else {
+                    self.setGameData(.invalid(report))
+                }
             }
         }
     }

@@ -143,6 +143,13 @@ private struct GameDataSection: View {
                 case .invalid(let report): InvalidView(report: report)
                 }
 
+                if let rejected = model.rejectedSelection {
+                    Divider()
+                    Label("The folder you just chose was not used. Your working game data is unchanged.", systemImage: "arrow.uturn.backward.circle")
+                        .font(.callout).foregroundStyle(.secondary)
+                    InvalidView(report: rejected)
+                }
+
                 if let interrupted = model.interruptedImport, !model.isGameDataBusy {
                     InterruptedView(interrupted: interrupted)
                 }

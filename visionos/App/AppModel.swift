@@ -47,6 +47,9 @@ final class AppModel {
     /// Set once the Zero Hour folder was read but no base Generals folder was found; the next
     /// pick is then treated as the separate Generals folder.
     var awaitingBaseFolder = false
+    /// The last folder the player chose that could not be used, shown next to the (preserved)
+    /// working configuration. A rejected pick never discards data that is already ready.
+    var rejectedSelection: GXGDReport?
 
     @ObservationIgnored var gameDataStartupDone = false
     @ObservationIgnored var heldScopes: [URL] = []
