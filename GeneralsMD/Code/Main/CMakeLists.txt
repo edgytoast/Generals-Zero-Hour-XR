@@ -275,6 +275,12 @@ if(SAGE_BUILD_VISIONOS_LIB)
         target_compile_options(z_generals PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
     endif()
 
+    # SDL's main-callback helper (src/main/ios/SDL_sysmain_callbacks.m) uses CADisplayLink,
+    # which lives in QuartzCore; SDL3's own CMake does not declare that framework. It is
+    # only linked when something pulls that member in (an -ObjC host link), but then the
+    # framework must be there. The host app links QuartzCore anyway.
+    target_link_libraries(z_generals PUBLIC "-framework QuartzCore")
+
     # Public headers for host code that includes engine headers (BaseType.h etc.).
     target_include_directories(z_generals PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}

@@ -23,11 +23,18 @@
 **
 ** SDL3 is built for visionOS with SDL_VIDEO=OFF (its UIKit video driver does not
 ** compile against the xros SDK, and the SwiftUI + Compositor Services host owns
-** windowing; see cmake/sdl3.cmake). The two device-class queries below are defined
-** by that UIKit driver (src/video/uikit/SDL_uikitvideo.m) yet are still referenced
-** by SDL's core (src/SDL.c, SDL_IsTablet / SDL_IsTV), so without the driver the
-** final link reports them undefined. The host is a Vision Pro: neither an iPad
-** nor an Apple TV.
+** windowing; see cmake/sdl3.cmake). The functions below are defined by that UIKit
+** driver yet are still referenced by SDL's core, so without the driver the final
+** link reports them undefined:
+**
+**   SDL_IsIPad / SDL_IsAppleTV   (src/video/uikit/SDL_uikitvideo.m), referenced by
+**                                SDL_IsTablet / SDL_IsTV in src/SDL.c. The host is a
+**                                Vision Pro: neither an iPad nor an Apple TV.
+**   SDL_UpdateLifecycleObserver  (src/video/uikit/SDL_uikitevents.m), referenced by
+**                                src/main/ios/SDL_sysmain_callbacks.m.o. Only linked
+**                                when SDL's main-callback helper is pulled in (for
+**                                example by an -ObjC link); there is no UIKit video
+**                                driver whose lifecycle it could observe, so no-op.
 **
 ** Only compiled into the visionOS static engine library.
 */
@@ -44,6 +51,10 @@ bool SDL_IsIPad(void)
 bool SDL_IsAppleTV(void)
 {
 	return false;
+}
+
+void SDL_UpdateLifecycleObserver(void)
+{
 }
 
 } // extern "C"

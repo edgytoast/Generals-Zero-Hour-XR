@@ -2,7 +2,7 @@
 # Merge the engine's transitive static closure into ONE archive per slice and wrap the
 # slices into GeneralsZHEngine.xcframework.
 #
-#   make-xcframework.sh [--simulator] [--device] [--output DIR] [--no-xcframework]
+#   make-xcframework.sh [--simulator] [--device] [--output DIR] [--strip-debug] [--no-xcframework]
 #
 # For every slice that was built by build-engine.sh (default: all slices whose build tree
 # exists) this
@@ -19,6 +19,10 @@
 #      every *.h found in GeneralsMD/Code/Main/visionos/) into
 #         <out>/GeneralsZHEngine.xcframework
 #
+# --strip-debug runs `strip -S` on each merged archive (removes DWARF, keeps the symbol table):
+# about 720 MB -> 75 MB per slice. The default keeps the debug info of the RelWithDebInfo build
+# (crash symbolication, lldb).
+#
 # <out> defaults to <build root>/xcframework (GX_ENGINE_BUILD_ROOT, default <repo>/build).
 # ANGLE is not merged: the host app links it (scripts/build/visionos/build-angle.sh).
 set -euo pipefail
@@ -26,13 +30,15 @@ set -euo pipefail
 SLICES=()
 OUT=""
 DO_XCF=1
+STRIP=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --simulator) SLICES+=(simulator) ;;
     --device)    SLICES+=(device) ;;
     --output)    OUT="${2:?--output needs a directory}"; shift ;;
+    --strip-debug) STRIP=1 ;;
     --no-xcframework) DO_XCF=0 ;;
-    -h|--help)   sed -n '2,24p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help)   sed -n '2,30p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) echo "make-xcframework.sh: unknown argument '$1' (see --help)" >&2; exit 2 ;;
   esac
   shift
@@ -100,6 +106,10 @@ PYEOF
   echo "==> [$slice] libtool -static merge -> $merged"
   # shellcheck disable=SC2046
   xcrun libtool -static -arch_only arm64 -o "$merged" $(cat "$sdir/link-inputs.txt") 2> "$sdir/libtool.log" || { cat "$sdir/libtool.log" >&2; exit 1; }
+  if (( STRIP )); then
+    echo "==> [$slice] strip -S (debug info)"
+    xcrun strip -S "$merged"
+  fi
   echo "    $(du -h "$merged" | cut -f1)  $(xcrun ar t "$merged" | grep -c '\.o$') members;" \
        "$(grep -c 'same member name' "$sdir/libtool.log" || true) duplicate-member-name warnings (see $sdir/libtool.log)"
   echo "    system flags the host app must link:"; sed 's/^/      /' "$sdir/link-flags.txt"
