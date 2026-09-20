@@ -115,10 +115,11 @@ void visionCaptureEngineFlags(VisionEngineBridge &b, VisionEngineFlags &f) {
 	f.canAdjustWorld = b.CanAdjustWorld();
 	f.canObserveGround = b.CanObserveGround();
 	f.expandedUI = b.ExpandedUI();
-	f.placementPending = b.CanRotatePlacement();
+	f.canRotatePlacement = b.CanRotatePlacement();
+	f.placementPending = b.PlacementPending() || f.canRotatePlacement;
 	f.armedCommand = b.HasArmedCommand();
 	f.placementLegal = b.PlacementLegal();
-	f.placementDegrees = f.placementPending ? b.PlacementDegrees() : 0;
+	f.placementDegrees = f.canRotatePlacement ? b.PlacementDegrees() : 0;
 	f.gameWidth = b.GameWidth();
 	f.gameHeight = b.GameHeight();
 }
@@ -251,13 +252,13 @@ void VisionInteraction::update(const VisionHostState &host, const XRInteractionE
 	placementCancelArmed_ = false;
 	panelPointerPanel_ = -1;
 	activeRegion_ = 0;
-	groundTargetKnown_ = false;
+	groundTargetKnown_ = groundTargetValid_ = false;
 
 	// Board ownership: the host applies the last proposal; we re-read it every frame.
 	if (host.boardPlaced) {
 		board_ = host.board;
 		boardInit_ = true;
-	} else if (!boardInit_ && (host.headTracked || host.frame >= 90)) {
+	} else if (!boardInit_ && (host.headTracked || stats_.updates >= 90)) {
 		board_ = visionInitialBoard(cfg_, host, cfg_.boardDefaultWidthM);
 		boardInit_ = true;
 		boardDirty_ = true;
@@ -628,7 +629,7 @@ void VisionInteraction::handleCommand(int cmd, int value) {
 		if (observer_.mode != XrObserverMode::Off) exitGround(true);
 		break;
 	case XR_CMD_ROTATE_PLACEMENT_STEP:
-		if (bridge_ && host_.engine.placementPending && bridge_->CanRotatePlacement()) {
+		if (bridge_ && host_.engine.canRotatePlacement && bridge_->CanRotatePlacement()) {
 			// RotatePlacement requires the spatial pointer to be active (snapshot of the last pick).
 			if (!spatialActive_) engineSpatialPointer(true);
 			bridge_->RotatePlacement(float(value) * kPi / 180.0f);
@@ -684,10 +685,18 @@ VisionInteraction::Target VisionInteraction::classify(const Ptr &p, uint32_t are
 		if (!panel.visible || observer_.mode != XrObserverMode::Off) continue;
 		float m[16], u = 0, v = 0;
 		surfaceMatrix(panel.surface, m);
-		if (!panelRayUV(m, panel.aspect, aim, &u, &v)) continue;
+		XrPosef panelAim = aim;
+		XrVector3f panelOrigin = origin;
+		if (!p.hasRay && p.kind == XR_POINTER_DIRECT_PINCH) {
+			// Fingers touching the panel: probe straight into its face from the pinch point.
+			const XrVector3f n = xrRotate(panel.surface.pose.orientation, {0, 0, 1});
+			panelOrigin = xrAdd(p.pos, xrScale(n, 0.05f));
+			panelAim = visionAimFromRay(panelOrigin, xrScale(n, -1.0f));
+		}
+		if (!panelRayUV(m, panel.aspect, panelAim, &u, &v)) continue;
 		const XrVector3f point = xrAdd(panel.surface.pose.position, xrRotate(panel.surface.pose.orientation,
 			{(u - 0.5f) * panel.surface.width, (v - 0.5f) * panel.surface.width * panel.aspect, 0}));
-		const float dist = xrLength(xrSub(point, origin));
+		const float dist = xrLength(xrSub(point, panelOrigin));
 		int control = -1;
 		if (panel.kind == kVisionPanelGameHud) {
 			// The unframed HUD's empty space must not become an invisible input wall.
@@ -794,6 +803,7 @@ void VisionInteraction::startRole(Ptr &p) {
 	if (observer_.mode != XrObserverMode::Off) {
 		p.role = Role::GroundTap;
 		p.holdStartHost = host_.time_s;
+		previewGround(p);
 		return;
 	}
 	const Target &t = p.target;
@@ -838,8 +848,7 @@ void VisionInteraction::startRole(Ptr &p) {
 			// Our own hand-space classifier (same class and 2 cm threshold as the engine's trigger) must be armed too.
 			p.trig = XrTriggerGesture();
 			p.trig.update(false, true, p.pos, false, false);
-			const XrTriggerEvent b = p.trig.update(true, true, p.pos, true, effectiveAdditive());
-			(void)b;
+			p.trig.update(true, true, p.pos, true, effectiveAdditive());
 		}
 		break;
 	}
@@ -968,7 +977,7 @@ void VisionInteraction::beginPanel(Ptr &p) {
 	panelPixel(p, p.target.planePoint);
 	p.panelPressControl = p.panelControl;
 	const bool hostOwned = panel.kind == kVisionPanelCommandsButton || panel.kind == kVisionPanelCommandsConsole;
-	p.panelStageFrame = host_.frame;
+	p.panelStageFrame = stats_.updates;
 	if (hostOwned) {
 		// Host panels never reach the game: the engine sees an idle controller (XrCommandUI.h behaviour).
 		if (spatialActive_ || pointerActive_ || triggerDown_) engineNeutral();
@@ -998,10 +1007,10 @@ void VisionInteraction::tickPanel(Ptr &p) {
 		if (p.released) { /* handled in finishPanel */ }
 		return;
 	}
-	if (p.panelStage == 1 && host_.frame > p.panelStageFrame) {
+	if (p.panelStage == 1 && stats_.updates > p.panelStageFrame) {
 		enginePointer(true, p.panelX, p.panelY, true); // press
 		p.panelStage = 2;
-		p.panelStageFrame = host_.frame;
+		p.panelStageFrame = stats_.updates;
 	} else if (p.panelStage == 2 && !p.released) {
 		enginePointer(true, p.panelX, p.panelY, true); // drag with the button held
 	}
@@ -1110,8 +1119,11 @@ void VisionInteraction::tickSelect(Ptr &p) {
 	// A second pinch that is still undecided (tap or two-hand?) holds the box decision back: otherwise a
 	// hand that starts moving a moment before its partner would always win and turn the gesture into a box.
 	if (Ptr *o = other(&p)) if (o->role == Role::Candidate) return;
+	// Hands: the shared XrTriggerGesture (2 cm of hand travel). A pointing device with an absolute ray has no hand
+	// motion, so its cursor travel on the board plane is measured instead (tickPointer keeps p.travel current).
+	const bool rayDriven = p.kind == XR_POINTER_DEVICE && p.hasCurrentRay;
 	const XrTriggerEvent ev = p.trig.update(true, true, p.pos, true, effectiveAdditive());
-	if (ev == XrTriggerEvent::Drag) {
+	if (rayDriven ? p.travel > cfg_.dragThresholdM : ev == XrTriggerEvent::Drag) {
 		startBox(p);
 		if (p.role == Role::Box) tickBox(p);
 	}
@@ -1147,10 +1159,11 @@ void VisionInteraction::cancelPointerRole(Ptr &p) {
 }
 
 void VisionInteraction::releaseSelect(Ptr &p) {
+	const bool rayDriven = p.kind == XR_POINTER_DEVICE && p.hasCurrentRay;
 	const XrTriggerEvent ev = p.trig.update(false, true, p.pos, true, effectiveAdditive());
 	const bool add = effectiveAdditive();
 	if (!p.pickedStart) return;
-	if (ev == XrTriggerEvent::Drop) {
+	if (rayDriven ? p.travel > cfg_.dragThresholdM : ev == XrTriggerEvent::Drop) {
 		// Release was the first sample beyond the drag threshold: a very fast flick is still a box.
 		startBox(p);
 		if (p.role == Role::Box) { tickBox(p); releaseBox(p); }
@@ -1238,7 +1251,7 @@ void VisionInteraction::tickAim(Ptr &p) {
 		placementFollowing_ = true;
 	}
 	// Hand twist rotates the ghost (RotatePlacement needs the spatial pointer snapshot: engine active above).
-	if (p.hasRot && bridge_ && e.placementPending && placementFollowing_) {
+	if (p.hasRot && bridge_ && e.canRotatePlacement && placementFollowing_) {
 		const float tw = wrapPi(visionTwistAbout(p.rot0, p.rot, cfg_.twistAxis)) * cfg_.twistSign;
 		const float eff = deadZone(tw, cfg_.twistDeadzoneRad), delta = eff - p.twistApplied;
 		if (std::fabs(delta) > 1e-4f && bridge_->RotatePlacement(delta)) {
@@ -1294,6 +1307,30 @@ void VisionInteraction::exitGround(bool fade) {
 	engineNeutral();
 }
 
+// What a release would choose: Armed asks the engine (terrain slope, shroud, models; the engine owns the rules),
+// Active shows the gaze point on the virtual ground plane if it is within teleport range.
+void VisionInteraction::previewGround(Ptr &p) {
+	p.groundPreview = false;
+	if (!bridge_ || !p.hasRay) return;
+	if (observer_.mode == XrObserverMode::Armed) {
+		XrVector3f ground = {}, room = {};
+		p.groundPreviewValid = host_.engine.canObserveGround &&
+			bridge_->PickObserverGround(board_, visionAimFromRay(p.rayO, p.rayD), ground, &room);
+		p.groundPreviewRoom = room;
+		p.groundPreview = true;
+	} else if (observer_.mode == XrObserverMode::Active) {
+		XrVector3f hit;
+		float t;
+		const float groundY = observer_.head.y - kXrObserverEyeHeightMetres;
+		if (rayPlane(p.rayO, p.rayD, {0, groundY, 0}, {0, 1, 0}, hit, t)) {
+			const float dx = hit.x - host_.head.position.x, dz = hit.z - host_.head.position.z;
+			p.groundPreviewRoom = hit;
+			p.groundPreviewValid = std::sqrt(dx * dx + dz * dz) <= cfg_.teleportMaxMetres;
+			p.groundPreview = true;
+		}
+	}
+}
+
 void VisionInteraction::tickGround(Ptr &p) {
 	if (p.released) return;
 	const bool still = p.travel < cfg_.dragThresholdM;
@@ -1305,9 +1342,10 @@ void VisionInteraction::tickGround(Ptr &p) {
 		holdProgress_ = 0;
 		return;
 	}
-	if (observer_.mode == XrObserverMode::Armed && p.hasRay && !groundTargetKnown_) {
-		// Preview only: what release would choose. The engine owns the safety rules.
+	if (p.groundPreview) {
 		groundTargetKnown_ = true;
+		groundTargetValid_ = p.groundPreviewValid;
+		groundTargetRoom_ = p.groundPreviewRoom;
 	}
 }
 
@@ -1331,7 +1369,6 @@ void VisionInteraction::releaseGround(Ptr &p) {
 			}
 		}
 		raise(kVisionEventGroundInvalid);
-		groundTargetRoom_ = room;
 		return;
 	}
 	if (observer_.mode == XrObserverMode::Active && !observer_.requireRelease) {
@@ -1477,6 +1514,9 @@ void VisionInteraction::tickWorkspace() {
 // =============================================================== per frame
 
 void VisionInteraction::tickPointer(Ptr &p) {
+	// A mouse/trackpad pointer may report no hand motion at all: its absolute ray is the motion.
+	if (p.kind == XR_POINTER_DEVICE && p.hasCurrentRay && p.cursor.valid && !p.simulated)
+		p.travel = std::max(p.travel, xrLength(xrSub(cursorPoint(p, p.cursor), p.cursor.start)));
 	switch (p.role) {
 	case Role::Select: tickSelect(p); break;
 	case Role::Box: tickBox(p); break;
@@ -1537,11 +1577,11 @@ void VisionInteraction::tick() {
 		const VisionPanel *panel = p.panelIndex >= 0 && p.panelIndex < host_.panelCount ? &host_.panels[p.panelIndex] : nullptr;
 		const bool hostOwned = panel && (panel->kind == kVisionPanelCommandsButton || panel->kind == kVisionPanelCommandsConsole);
 		if (hostOwned) { finishPanel(p); p = Ptr(); continue; }
-		if (p.panelStage == 1 && host_.frame > p.panelStageFrame) {
+		if (p.panelStage == 1 && stats_.updates > p.panelStageFrame) {
 			enginePointer(true, p.panelX, p.panelY, true);
 			p.panelStage = 2;
-			p.panelStageFrame = host_.frame;
-		} else if (p.panelStage >= 2 && host_.frame > p.panelStageFrame) {
+			p.panelStageFrame = stats_.updates;
+		} else if (p.panelStage >= 2 && stats_.updates > p.panelStageFrame) {
 			finishPanel(p);
 			p = Ptr();
 		} else if (p.panelStage == 0) {

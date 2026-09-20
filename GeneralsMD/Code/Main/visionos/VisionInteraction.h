@@ -25,7 +25,6 @@
 #include "../../../../visionos/Platform/XRInteraction.h"
 #include "VisionEngineBridge.h"
 #include "VisionHostState.h"
-#include "XrBuildRotation.h"
 #include "XrPanelLayout.h"
 #include "XrTactics.h"
 #include "XrCommands.h"
@@ -255,6 +254,27 @@ float visionFadeAlpha(const VisionConfig &cfg, double start, double now);
 // Wrist twist (radians) of `now` relative to `start` about the hand-local axis (0 x, 1 y, 2 z): swing-twist.
 float visionTwistAbout(XrQuaternionf start, XrQuaternionf now, int axis);
 
+// Drain XRInteraction_PollEvent (implemented by the shell, visionos/Input/GXXRInput.mm) into `out`; call once per frame.
+inline size_t visionDrainEvents(XRInteractionEvent *out, size_t max) {
+	size_t n = 0;
+	while (n < max && XRInteraction_PollEvent(&out[n])) ++n;
+	return n;
+}
+
+// Copy the parts of the output the engine frame description needs: the physical board, the map coverage from the
+// zoom, and Ground View (observer) placement. Everything else in XrWorldFrame (eyes, fov, sizes, toggles) stays the
+// caller's. `output.worldZoom` already includes the host's stored zoom, so the caller just stores it back.
+inline void visionApplyToWorldFrame(const VisionInteractionOutput &output, XrWorldFrame &frame) {
+	frame.board = output.board;
+	frame.coverage = xrMapCoverage(output.worldZoom, output.board.width);
+	frame.observer = output.ground.mode == XrObserverMode::Active;
+	if (frame.observer) {
+		frame.observerGround = output.ground.ground;
+		frame.observerHead = output.ground.head;
+		frame.observerForward = output.ground.forward;
+	}
+}
+
 // ------------------------------------------------------------------ the state machine
 
 class VisionInteraction {
@@ -350,6 +370,8 @@ private:
 		float panAppliedX = 0, panAppliedY = 0;
 		// ground view
 		double holdStartHost = 0;
+		bool groundPreview = false, groundPreviewValid = false;
+		XrVector3f groundPreviewRoom = {};
 	};
 
 	// -- event intake --
@@ -412,6 +434,7 @@ private:
 
 	// -- Ground View --
 	void exitGround(bool fade);
+	void previewGround(Ptr &p);
 	bool teleport(Ptr &p);
 	void startFade() { fadeStart_ = host_.time_s; fadeRunning_ = true; }
 

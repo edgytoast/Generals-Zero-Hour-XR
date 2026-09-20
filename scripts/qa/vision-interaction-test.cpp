@@ -37,7 +37,7 @@ struct FakeBridge : VisionEngineBridge {
 	std::vector<Call> calls;
 	// configuration
 	bool pickOk = true, canAdjust = true, canRotate = false, canObserve = true, interactive = true, stereo = true;
-	bool armed = false, expanded = false, hudHasUI = true, obsPickOk = true;
+	bool armed = false, expanded = false, hudHasUI = true, obsPickOk = true, pendingOnly = false;
 	int legal = -1;
 	float placementDeg = 0;
 	float wallX = 1e9f;      // observer steps beyond this x are refused
@@ -92,6 +92,7 @@ struct FakeBridge : VisionEngineBridge {
 	bool AdjustCamera(float yaw, float pitch) override { Call k{C::Adjust}; k.a = yaw; k.b = pitch; calls.push_back(k); return adjustOk; }
 	bool NavigateWorld(float r, float f, float z) override { Call k{C::Navigate}; k.a = r; k.b = f; k.d = z; calls.push_back(k); return navigateOk; }
 	bool CanAdjustWorld() override { return canAdjust; }
+	bool PlacementPending() override { return canRotate || pendingOnly; }
 	bool CanRotatePlacement() override { return canRotate; }
 	bool RotatePlacement(float radians) override { Call k{C::Rotate}; k.a = radians; calls.push_back(k); return canRotate; }
 	float PlacementDegrees() override { return placementDeg; }
@@ -162,7 +163,8 @@ struct Sim {
 		host.engine.canAdjustWorld = bridge.canAdjust;
 		host.engine.canObserveGround = bridge.canObserve;
 		host.engine.expandedUI = bridge.expanded;
-		host.engine.placementPending = bridge.canRotate;
+		host.engine.placementPending = bridge.canRotate || bridge.pendingOnly;
+		host.engine.canRotatePlacement = bridge.canRotate;
 		host.engine.armedCommand = bridge.armed;
 		host.engine.placementLegal = bridge.legal;
 		host.engine.placementDegrees = bridge.placementDeg;
@@ -1069,6 +1071,20 @@ static void testPlacement() {
 		s.frame();
 		CHECK(s.bridge.count(C::Click) == 1);
 	}
+	// ---- a placement that cannot rotate (wall / anchored line build) still uses the aim flow, without twist
+	{
+		Sim s;
+		s.bridge.pendingOnly = true;
+		s.beginAtBoard(1, XR_HAND_RIGHT, 0.1f, 0.0f, H0());
+		s.frame();
+		CHECK(s.out.mode == VisionMode::Placement && s.out.placement.active);
+		s.move(1, XR_HAND_RIGHT, H0(), twistQ(1.0f));
+		s.frame();
+		CHECK(s.bridge.count(C::Rotate) == 0 && !s.out.placement.rotating);
+		s.end(1, XR_HAND_RIGHT, H0());
+		s.frame();
+		CHECK(s.bridge.count(C::Click) == 1 && s.bridge.count(C::Trigger) == 0);
+	}
 	// ---- button rotation steps
 	{
 		Sim s;
@@ -1114,7 +1130,7 @@ static void testGroundView() {
 	s.frame();
 	CHECK(s.out.ground.mode == XrObserverMode::Active);
 	CHECK(s.out.events & kVisionEventGroundEntered);
-	CHECK(s.bridge.count(C::ObsPick) == 1);
+	CHECK(s.bridge.count(C::ObsPick) == 2); // one preview at pinch start, one authoritative pick at release
 	// PickObserverGround got the tabletop board and the gaze ray
 	{
 		const auto p = s.bridge.of(C::ObsPick)[0];
@@ -1133,6 +1149,26 @@ static void testGroundView() {
 	CHECK(s.out.ground.fadeAlpha > 0 && s.out.ground.fadeAlpha < 1);
 	s.frames(10);
 	NEAR(s.out.ground.fadeAlpha, 0.0f);
+	// ---- armed preview: while the pinch is held the engine's verdict is exposed for the reticle
+	{
+		s.bridge.clear();
+		Sim p;
+		p.command(XR_CMD_ENTER_GROUND_VIEW);
+		p.frames(3);
+		p.beginAtBoard(1, XR_HAND_RIGHT, 0.2f, 0.1f, hand);
+		p.frame();
+		CHECK(p.out.ground.hasTarget && p.out.ground.targetValid);
+		VNEAR(p.out.ground.targetRoom, visionBoardToWorld(p.host.board, {0.2f, 0.1f, 0}));
+		p.end(1, XR_HAND_RIGHT, hand);
+		p.frame();
+		Sim q;
+		q.bridge.obsPickOk = false;
+		q.command(XR_CMD_ENTER_GROUND_VIEW);
+		q.frames(3);
+		q.beginAtBoard(1, XR_HAND_RIGHT, 0.2f, 0.1f, hand);
+		q.frame();
+		CHECK(q.out.ground.hasTarget && !q.out.ground.targetValid);
+	}
 	// ---- teleport: gaze at the virtual ground 2 m ahead and 1 m right, tap
 	{
 		const XrVector3f headNow = kHead;
@@ -1578,6 +1614,31 @@ static void testPanels() {
 	CHECK(sawActivation && r.bridge.count(C::Tactical) == 0);
 }
 
+static void testDirectPinchPanel() {
+	// fingers touching the engine UI panel: no gaze ray, the hand projects straight onto the panel face
+	Sim s;
+	VisionPanel ui;
+	ui.visible = true;
+	ui.kind = kVisionPanelGameUI;
+	ui.surface.width = 0.9f;
+	ui.surface.pose.position = {0, 1.0f, -0.5f};
+	ui.aspect = 0.5f;
+	ui.rect = {0, 0, 1, 1};
+	s.host.panels[0] = ui;
+	s.host.panelCount = 1;
+	XRInteractionEvent e = s.base(XR_EVENT_PINCH_BEGIN, 1, XR_HAND_RIGHT, {-0.225f, 1.1125f, -0.48f}); // u=.25, v=.75, 2 cm in front
+	e.pointer_kind = XR_POINTER_DIRECT_PINCH;
+	s.queue.push_back(e);
+	s.frame();
+	CHECK(s.out.mode == VisionMode::PanelPointer);
+	NEAREPS(s.out.panelU, 0.25f, 5e-3f);
+	NEAREPS(s.out.panelV, 0.75f, 5e-3f);
+	const auto ptrs = s.bridge.of(C::Pointer);
+	CHECK(!ptrs.empty());
+	NEAREPS(ptrs[0].a, 0.25f * 1279.0f, 1.0f);
+	NEAREPS(ptrs[0].b, (1.0f - 0.75f) * 719.0f, 1.0f);
+}
+
 static void testSimulatorFallback() {
 	// Option emulates the second hand (mirror about the pivot): moving the mouse rotates/scales the two-hand gesture.
 	Sim s;
@@ -1613,7 +1674,7 @@ static void testSimulatorFallback() {
 		XRInteractionEvent e = d.base(XR_EVENT_PINCH_DRAG, 1, XR_HAND_RIGHT, plus(H0(), 0.01f * i, 0, 0));
 		e.pointer_kind = XR_POINTER_DEVICE;
 		e.has_hand_pose = false;
-		e.position_world = {H0().x + 0.01f * i, H0().y, H0().z};
+		e.position_world = {0, 0, 0}; // a mouse reports no hand motion: the pointing ray is the only motion
 		e.has_current_ray = true;
 		const XrVector3f tgt = visionBoardToWorld(d.host.board, {-0.2f + 0.05f * i, 0.0f, 0});
 		const XrVector3f dir = xrSub(tgt, kHead);
@@ -1890,6 +1951,31 @@ static void testGlue() {
 	}
 }
 
+static void testWorldFrameHelpers() {
+	Sim s;
+	s.frame();
+	XrWorldFrame frame;
+	visionApplyToWorldFrame(s.out, frame);
+	VNEAR(frame.board.pose.position, s.host.board.pose.position);
+	NEAR(frame.coverage, xrMapCoverage(1.0f, 1.0f));
+	CHECK(!frame.observer);
+	s.command(XR_CMD_ENTER_GROUND_VIEW);
+	s.frames(3);
+	s.beginAtBoard(1, XR_HAND_RIGHT, 0.2f, 0.1f, H0());
+	s.frames(2);
+	s.end(1, XR_HAND_RIGHT, H0());
+	s.frame();
+	visionApplyToWorldFrame(s.out, frame);
+	CHECK(frame.observer);
+	NEAR(frame.observerGround.x, 20.0f);
+	VNEAR(frame.observerHead, kHead);
+	// drain helper: the glue queue feeds the state machine
+	XRInteraction_PostCommand(XR_CMD_SET_ADDITIVE, 1);
+	XRInteractionEvent ev[4];
+	CHECK(visionDrainEvents(ev, 4) == 1 && ev[0].type == XR_EVENT_COMMAND);
+	CHECK(visionDrainEvents(ev, 4) == 0);
+}
+
 static void testInteractionApiCompat() {
 	// v1 event layout is a prefix of v2: zero-initialised v1-style producers stay valid
 	XRInteractionEvent e = {};
@@ -1917,11 +2003,13 @@ int main() {
 	testTrackingLossAndFlush();
 	testBalancedUnderFlush();
 	testPanels();
+	testDirectPinchPanel();
 	testSimulatorFallback();
 	testRobustness();
 	testRegionsAndHover();
 	testInteractionApiCompat();
 	testGlue();
+	testWorldFrameHelpers();
 	printf("PASS %d vision interaction checks\n", checks);
 	return 0;
 }

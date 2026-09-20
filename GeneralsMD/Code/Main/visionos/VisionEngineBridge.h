@@ -74,6 +74,9 @@ public:
 	virtual bool CanAdjustWorld() = 0;
 
 	// ---- Building placement ----
+	// True while a building preview exists at all (TheInGameUI->getPendingPlaceType() != nullptr), even for
+	// placements that cannot be rotated (walls, anchored line builds). Default: same as CanRotatePlacement.
+	virtual bool PlacementPending() { return CanRotatePlacement(); }
 	virtual bool CanRotatePlacement() = 0;
 	virtual bool RotatePlacement(float radians) = 0;
 	virtual float PlacementDegrees() = 0;

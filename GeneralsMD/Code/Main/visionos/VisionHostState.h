@@ -47,7 +47,8 @@ struct VisionEngineFlags {
 	bool canAdjustWorld = false;    // XrGameBoot_CanAdjustWorld: skirmish/campaign, camera not script-locked
 	bool canObserveGround = false;  // XrGameBoot_CanObserveGround
 	bool expandedUI = false;        // native dialog open: world gestures are suspended, panels stay live
-	bool placementPending = false;  // XrGameBoot_CanRotatePlacement (a building preview exists)
+	bool placementPending = false;  // a building preview exists (bridge PlacementPending; falls back to CanRotatePlacement)
+	bool canRotatePlacement = false; // XrGameBoot_CanRotatePlacement: the preview can be rotated
 	bool armedCommand = false;      // XrGameBoot HasArmedCommand (ability/superweapon waiting for a target)
 	int placementLegal = -1;        // -1 unknown, 0 illegal, 1 legal (optional engine query)
 	float placementDegrees = 0;     // XrGameBoot_PlacementDegrees
