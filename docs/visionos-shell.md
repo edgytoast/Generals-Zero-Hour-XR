@@ -175,7 +175,7 @@ the direct-Metal scene (both use `Renderer/GXXRTestGeometry.h`), with GLSL ES 3.
 
 It also renders a **1280x720 UI panel** test pattern (title bar with frame counter, orientation markers in the corners
 red/green/blue/yellow, text-like bars, an animated progress bar, four button-like rectangles) into the ring's UI target
-and the bridge composites it as a 0.64 x 0.36 m world-anchored quad standing on the far edge of the board.
+and the bridge composites it as a 0.64 x 0.36 m world-anchored quad standing to the right of the board, turned toward the player.
 
 ### Instrumentation
 

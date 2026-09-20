@@ -506,14 +506,17 @@ const uint16_t kDigits[10] = {0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x
     float hx = 0, hz = 0;
     if (!ui || !XRPresentation_GetTabletopPlacement(wfb, &hx, &hz)) return @[];
     const simd_float4x4 worldFromBoard = M(wfb);
-    // Panel stands on the far edge of the board, facing the player (board +Z), 0.64 x 0.36 m (16:9).
-    const simd_float4 p = simd_mul(worldFromBoard, simd_make_float4(0.0f, 0.18f, -(gxxr::kBoardHalfZ + 0.04f), 1.0f));
-    const simd_float3x3 rot = simd_matrix(simd_normalize(worldFromBoard.columns[0].xyz), simd_normalize(worldFromBoard.columns[1].xyz),
-                                          simd_normalize(worldFromBoard.columns[2].xyz));
+    // Panel stands to the right of the board (clear of the launcher window that hangs over the far edge),
+    // turned to face the player's viewpoint 1.25 m in front of the board center, 0.64 x 0.36 m (16:9).
+    const float px = 0.90f, pz = 0.0f;
+    const simd_float4 p = simd_mul(worldFromBoard, simd_make_float4(px, 0.20f, pz, 1.0f));
+    const simd_float3x3 boardRot = simd_matrix(simd_normalize(worldFromBoard.columns[0].xyz), simd_normalize(worldFromBoard.columns[1].xyz),
+                                               simd_normalize(worldFromBoard.columns[2].xyz));
+    const simd_quatf yaw = simd_quaternion(-std::atan2(px, 1.25f), simd_make_float3(0, 1, 0));
     GXXRCompositeLayer* layer = [GXXRCompositeLayer layerWithName:@"ui-panel"
                                                           texture:ui
                                                          position:p.xyz
-                                                      orientation:simd_quaternion(rot)
+                                                      orientation:simd_mul(simd_quaternion(boardRot), yaw)
                                                        sizeMeters:simd_make_float2(0.64f, 0.36f)
                                                             flipY:YES];
     return @[layer];
