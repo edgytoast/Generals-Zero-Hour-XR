@@ -1558,6 +1558,7 @@ void ControlBar::update()
 
 
 
+// GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT): a pinch-and-hold on a command button has no hover, exactly like a finger hold, so the hold-to-describe path is right.
 #if defined(__ANDROID__) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
 	// GeneralsX @feature Android port 06/09/2026 Hold a command button to read its
 	// description. On a mouse the popup is a hover affordance; a touchscreen has no hover,

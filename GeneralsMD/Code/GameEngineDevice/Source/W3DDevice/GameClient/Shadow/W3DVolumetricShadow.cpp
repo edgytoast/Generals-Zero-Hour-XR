@@ -36,6 +36,8 @@
 
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 #include <ctime>
+// GeneralsX @feature visionOS port: GX_XR_HOST / GX_USES_D3D8GLES replace the bare __ANDROID__ tests below.
+#include "gx_backend.h"
 #include <assert.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
@@ -3819,7 +3821,7 @@ void W3DVolumetricShadowManager::reset()
 W3DVolumetricShadow* W3DVolumetricShadowManager::addShadow(RenderObjClass *robj, Shadow::ShadowTypeInfo *shadowInfo, Drawable *draw)
 {
 	bool createVolumes=TheGlobalData->m_useShadowVolumes;
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 	// GeneralsX @feature Codex 13/09/2026 Prepare shadow resources before
 	// entering stereo; render enablement remains scoped to the XR world frame.
 	extern bool GX_XR_OffscreenBoot;createVolumes=createVolumes || GX_XR_OffscreenBoot;
