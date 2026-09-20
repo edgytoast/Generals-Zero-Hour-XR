@@ -53,6 +53,9 @@ extern "C" void d3d8gles_resize(int w, int h);
 // NOT itself link sdl3lib -- can share one implementation instead of each
 // re-reading render_backend.cfg/the env vars themselves.
 extern "C" bool d3d8gles_ShouldUseVulkanBackend();
+// GeneralsX @feature visionOS port - off Android (visionOS) both queries exist and always
+// answer false: the GLES3 backend is the only backend, there is no render_backend.cfg and
+// no Vulkan/DXVK route. Engine code guarded by GX_USES_D3D8GLES calls them unchanged.
 
 // GeneralsX @perf Android port 09/05/2026 Draw-call breakdown by subsystem.
 // Engine code tags the passes it can identify cheaply so the per-frame perf log
@@ -97,13 +100,30 @@ extern "C" bool d3d8gles_ShouldUseANGLE();
 // is no window) and renders into an owned FBO on the caller's already-
 // current GLES context instead. The finished frame is readable as a plain
 // GL texture via d3d8gles_GetGameTexture() for the XR tabletop quad.
-// The EGL context MUST come from the system EGL implementation: the GL
-// dispatch is forced to system libGLESv3.so in this mode (ANGLE pointers
-// against a system context would be garbage). Pass nullptr to disable
-// (default); the config pointer must stay valid until device creation.
+// The GL function pointers MUST come from the implementation that owns the
+// current context. Without getProcAddress (Android/Quest) the dispatch is
+// forced to system libGLESv3.so, which is the system EGL the Quest host
+// created its context with. With getProcAddress (visionOS: ANGLE on Metal)
+// the dispatch is loaded through it instead -- see below. Pass nullptr to
+// disable (default); the config pointer must stay valid until device creation.
+//
+// GeneralsX @feature visionOS port - two fields APPENDED for the ANGLE/Metal
+// host (older hosts that only set eglDisplay/eglContext must zero the rest,
+// i.e. value-initialise the struct: `D3D8GLES_XRConfig cfg = {};`).
+//   getProcAddress  maps a GL function name to its address for the current
+//                   context (eglGetProcAddress of the host's ANGLE display).
+//                   When set, ALL gl* entry points load through it and multiview
+//                   is never used (ANGLE-Metal has no GL_OVR_multiview).
+//   flags           D3D8GLES_XRFLAG_* below.
 struct D3D8GLES_XRConfig {
 	void *eglDisplay; // EGLDisplay, informational (context must be current already)
 	void *eglContext; // EGLContext, informational
+	void *(*getProcAddress)(const char *name); // GL resolver; NULL = system libGLESv3.so
+	unsigned flags;   // D3D8GLES_XRFLAG_*
+};
+enum {
+	D3D8GLES_XRFLAG_NO_MULTIVIEW = 1, // never use OVR_multiview even if the resolver offers it
+	D3D8GLES_XRFLAG_FORCE_ATLAS  = 2  // backend-allocated stereo targets: one 2W x H atlas (one FBO, per-eye viewport+scissor)
 };
 extern "C" void d3d8gles_SetXRConfig(const struct D3D8GLES_XRConfig *cfg);
 extern "C" const struct D3D8GLES_XRConfig *d3d8gles_GetXRConfig();
@@ -129,6 +149,64 @@ extern "C" void d3d8gles_EndXRStereo();
 // P9 vertices: XYZ + RGBA float, world coordinates; depth-tested in both eyes.
 extern "C" void d3d8gles_DrawXRDecorations(const float *vertices,int count);
 extern "C" unsigned int d3d8gles_XRStereoTexture(int eye);
+
+// GeneralsX @feature visionOS port - host-supplied render targets.
+//
+// On visionOS the host (Compositor Services + Metal) owns the MTLTextures that
+// hold the finished frame. It wraps them as GL textures through ANGLE
+// (EGL_ANGLE_metal_texture_client_buffer -> eglCreateImageKHR ->
+// glEGLImageTargetTexture2DOES) and hands the GL names to the backend here, so
+// the engine renders straight into them: no copy, no glFinish, no glReadPixels.
+// Depth/stencil always stays backend-private (D24S8 renderbuffers).
+//
+// Slots (D3D8GLES_XRT_*):
+//   STEREO_LEFT / STEREO_RIGHT  per-eye world colour targets (what BeginXRStereo draws into)
+//   GAME                        the fully composed frame the engine draws into (backbuffer redirect)
+//   WORLD                       planar world snapshot for the split (world + detached UI) path
+//   UI                          UI-only layer (second colour attachment of the composed FBO)
+//
+// A slot with glTexture == 0 (or one that does not fit, see below) means "the backend
+// allocates its own texture exactly as on Android"; the accessors always return the
+// name actually in use, so a host can tell the two cases apart by comparing.
+//
+// Sizes: GAME/WORLD/UI must be exactly the engine backbuffer size (the -xres/-yres the
+// host booted the engine with); a mismatching slot is ignored (logged once) and the
+// backend keeps its own texture for that slot. Stereo targets define the per-eye
+// resolution: the width/height passed to d3d8gles_BeginXRStereo are only validated and
+// are otherwise superseded by the host texture size (the eye clip matrices carry the
+// projection, so any target size works; the host owns the pixel budget).
+//
+// Coordinate convention: every target is GL-native bottom-up, exactly like the
+// backend-allocated ones -- texel row 0 is GL window y = 0, which on ANGLE-Metal is the
+// BOTTOM of the picture. The compositor must flip V when sampling.
+//
+// atlas != 0: both eyes render into slot STEREO_LEFT (its width/height are the whole
+// atlas) and eye e uses eyeRect[e] = {x, y, w, h} in texel coordinates of that texture
+// (y counted from texel row 0). slot STEREO_RIGHT is ignored. atlas == 0: each eye fills
+// its own slot completely and eyeRect is ignored.
+enum {
+	D3D8GLES_XRT_STEREO_LEFT  = 0,
+	D3D8GLES_XRT_STEREO_RIGHT = 1,
+	D3D8GLES_XRT_GAME         = 2,
+	D3D8GLES_XRT_WORLD        = 3,
+	D3D8GLES_XRT_UI           = 4,
+	D3D8GLES_XRT_COUNT        = 5
+};
+struct D3D8GLES_XRHostTarget {
+	unsigned glTexture; // GL texture name (GL_TEXTURE_2D, RGBA8-compatible, colour-renderable); 0 = backend allocates
+	int width;
+	int height;
+};
+struct D3D8GLES_XRTargets {
+	struct D3D8GLES_XRHostTarget slot[D3D8GLES_XRT_COUNT];
+	int atlas;
+	int eyeRect[2][4];
+};
+// Copies *targets (NULL clears them and the backend reverts to its own textures). Call
+// every frame on the render thread with the GL context current, BEFORE the engine frame
+// (d3d8gles_BeginXRFrame): the names may change from frame to frame (ring slots) and
+// must stay valid until the frame is finished. The backend never deletes host names.
+extern "C" void d3d8gles_SetXRHostTargets(const struct D3D8GLES_XRTargets *targets);
 // Drop all CPU-side GL caches after external (XR quad) rendering on the
 // shared context -- see WebGLPipeline::invalidateCachedGLState().
 extern "C" void d3d8gles_InvalidateCachedState();
