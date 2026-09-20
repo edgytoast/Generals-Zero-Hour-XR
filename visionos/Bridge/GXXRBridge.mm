@@ -35,6 +35,7 @@
 #include "XRPresentation.h"
 
 #import "GXXRANGLEContext.h"
+#import "GXXRBridgeHost.h"
 #import "GXXRGLTestScene.h"
 #import "GXXRMetalRenderer.h"
 #import "GXXRTargetRing.h"
@@ -199,6 +200,15 @@ const AngleOptions& LaunchAngleOptions() {
     return o;
 }
 
+// Client registered through GXXRBridgeSetHostFrameClient (the engine bridge).
+id<GXXRHostFrameClient> gHostClient = nil;
+std::mutex gHostClientMutex;
+
+id<GXXRHostFrameClient> HostClient() {
+    std::lock_guard<std::mutex> lock(gHostClientMutex);
+    return gHostClient;
+}
+
 // One frame-loop thread at a time. The ANGLE context (and, later, the engine's GL objects) outlive
 // every loop, so a re-opened immersive space's loop must wait for the previous one to release it.
 std::mutex gLoopMutex;
@@ -266,6 +276,11 @@ void GXXRBridgeSetBoolOption(const char* key, bool value) {
 }
 
 void GXXRBridgeRecenter(void) { XRPresentation_Recenter(); }
+
+void GXXRBridgeSetHostFrameClient(id<GXXRHostFrameClient> client) {
+    std::lock_guard<std::mutex> lock(gHostClientMutex);
+    gHostClient = client;
+}
 
 void GXXRBridgeNotifyLifecycle(int32_t event) { PlatformLifecycle_Notify((PlatformLifecycleEvent)event); }
 
@@ -396,7 +411,8 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
 
 - (void)setUpANGLE {
     const AngleOptions& opt = LaunchAngleOptions();
-    if (!(opt.testScene || Sh().optAngleTestScene.load())) return;
+    id<GXXRHostFrameClient> hostClient = HostClient();
+    if (!(hostClient || opt.testScene || Sh().optAngleTestScene.load())) return;
     _angleEyeScale = opt.eyeScale;
     GXXRANGLEContext* ctx = [GXXRANGLEContext sharedContext];
     if (!ctx || ![ctx makeCurrent]) {
@@ -415,17 +431,22 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
         _angle = nil;
         return;
     }
-    _glScene = [[GXXRGLTestScene alloc] initWithContext:ctx ring:_ring];
-    if (!_glScene) {
-        SetMessage("GLES3 test scene failed to build; using the direct-Metal test scene");
-        [_ring teardown];
-        _ring = nil;
-        [ctx releaseCurrent];
-        _angle = nil;
-        return;
+    if (hostClient) {
+        _glClient = hostClient;
+        if ([hostClient respondsToSelector:@selector(hostDidAttachWithContext:ring:)]) [hostClient hostDidAttachWithContext:ctx ring:_ring];
+    } else {
+        _glScene = [[GXXRGLTestScene alloc] initWithContext:ctx ring:_ring];
+        if (!_glScene) {
+            SetMessage("GLES3 test scene failed to build; using the direct-Metal test scene");
+            [_ring teardown];
+            _ring = nil;
+            [ctx releaseCurrent];
+            _angle = nil;
+            return;
+        }
+        if (opt.noUIPanel) [_ring setSizeWidth:0 height:0 forTarget:D3D8GLES_XRT_UI];
+        _glClient = _glScene;
     }
-    if (opt.noUIPanel) [_ring setSizeWidth:0 height:0 forTarget:D3D8GLES_XRT_UI];
-    _glClient = _glScene;
     _angleActive = true;
     Shared& s = Sh();
     std::lock_guard<std::mutex> lock(s.mutex);
@@ -438,6 +459,7 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
 - (void)tearDownANGLE {
     if (!_angle) return;
     [_angle makeCurrent];
+    if ([_glClient respondsToSelector:@selector(hostWillDetach)]) [_glClient hostWillDetach];
     [_glScene teardown];
     _glScene = nil;
     _glClient = nil;
@@ -500,7 +522,10 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
             }
             if (state == cp_layer_renderer_state_invalidated) break;
             if (state == cp_layer_renderer_state_paused) {
-                cp_layer_renderer_wait_until_running(_layer);
+                // No GL and no Metal work while paused. Poll instead of cp_layer_renderer_wait_until_running so a
+                // cancelled loop (immersive space closed and re-opened) can never hang a successor that is
+                // waiting for the ANGLE context.
+                [NSThread sleepForTimeInterval:0.02];
                 continue;
             }
 

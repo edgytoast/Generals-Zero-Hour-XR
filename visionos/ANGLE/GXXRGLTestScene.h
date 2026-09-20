@@ -13,22 +13,12 @@
 #import <Foundation/Foundation.h>
 
 #import "GXXRANGLEContext.h"
+#import "GXXRHostFrameClient.h"
 #import "GXXRMetalRenderer.h"
 #import "GXXRTargetRing.h"
 #include "XRPresentation.h"
 
 NS_ASSUME_NONNULL_BEGIN
-
-/// What the bridge asks of whatever renders into the target ring (this test scene now, the engine
-/// host later).
-@protocol GXXRHostFrameClient <NSObject>
-/// Runs on the render thread with the ANGLE context current and the ring slot acquired. Renders
-/// (GL), submits per-eye textures through XRPresentation_SubmitEyeTexture and returns the result.
-- (XRFrameResult)renderFrame:(const XRFrameInfo*)frame;
-@optional
-/// World-anchored layers to composite after the eyes (UI / world / game textures of the current slot).
-- (NSArray<GXXRCompositeLayer*>*)compositeLayersForFrame:(const XRFrameInfo*)frame;
-@end
 
 @interface GXXRGLTestScene : NSObject <GXXRHostFrameClient>
 
