@@ -1,0 +1,57 @@
+diff --git a/Source/ThirdParty/ANGLE/ANGLE.xcodeproj/project.pbxproj b/Source/ThirdParty/ANGLE/ANGLE.xcodeproj/project.pbxproj
+index bd576087224..b14d06acfc0 100644
+--- a/Source/ThirdParty/ANGLE/ANGLE.xcodeproj/project.pbxproj
++++ b/Source/ThirdParty/ANGLE/ANGLE.xcodeproj/project.pbxproj
+@@ -2430,6 +2430,9 @@
+ 		FFD002B02746E560002BE3BC /* entry_points_gles_3_1_autogen.h in Headers */ = {isa = PBXBuildFile; fileRef = FFD002AB2746E55F002BE3BC /* entry_points_gles_3_1_autogen.h */; };
+ 		FFE447DE9596051BF33327B4 /* es3fShaderOperatorTests.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 7D144E25BC63593E858A0456 /* es3fShaderOperatorTests.cpp */; };
+ 		FFF84620AF167DAC8D50A5B2 /* es2pTextureCases.cpp in Sources */ = {isa = PBXBuildFile; fileRef = C0184B90A6F356864E8A5968 /* es2pTextureCases.cpp */; };
++		A1C0DE0000000000000E6D01 /* libEGL_autogen.cpp in Sources (XRPORT_EGL_DYN) */ = {isa = PBXBuildFile; fileRef = 7BB9723C2DE4827800455D13 /* libEGL_autogen.cpp */; };
++		A1C0DE0000000000000E6D02 /* libEGL_autogen.cpp in Sources (XRPORT_EGL_STA) */ = {isa = PBXBuildFile; fileRef = 7BB9723C2DE4827800455D13 /* libEGL_autogen.cpp */; };
++		A1C0DE0000000000000E6D03 /* libGLESv2_autogen.cpp in Sources (XRPORT_GLES_STA) */ = {isa = PBXBuildFile; fileRef = 7BB972342DE480F000455D13 /* libGLESv2_autogen.cpp */; };
+ /* End PBXBuildFile section */
+ 
+ /* Begin PBXBuildRule section */
+@@ -9008,6 +9011,7 @@
+ 			isa = PBXSourcesBuildPhase;
+ 			buildActionMask = 2147483647;
+ 			files = (
++				A1C0DE0000000000000E6D01 /* libEGL_autogen.cpp in Sources (XRPORT) */,
+ 				7BED8E042F9A493200F15B70 /* AddDefaultReturnStatements.cpp in Sources */,
+ 				7B359DB52A7CEDAA0016DC59 /* AddExplicitTypeCasts.cpp in Sources */,
+ 				DF83E2162639FC74000825EF /* aligned_memory.cpp in Sources */,
+@@ -10042,6 +10046,8 @@
+ 			isa = PBXSourcesBuildPhase;
+ 			buildActionMask = 2147483647;
+ 			files = (
++				A1C0DE0000000000000E6D02 /* libEGL_autogen.cpp in Sources (XRPORT) */,
++				A1C0DE0000000000000E6D03 /* libGLESv2_autogen.cpp in Sources (XRPORT) */,
+ 				7BB973A82DE48E7700455D13 /* android_util.cpp in Sources */,
+ 				7BB973252DE4873000455D13 /* angletypes.cpp in Sources */,
+ 				7BB973592DE4874100455D13 /* AstcDecompressorNoOp.cpp in Sources */,
+diff --git a/Source/ThirdParty/ANGLE/Configurations/BaseTarget.xcconfig b/Source/ThirdParty/ANGLE/Configurations/BaseTarget.xcconfig
+index f2b629a8ac8..540e48b9f2b 100644
+--- a/Source/ThirdParty/ANGLE/Configurations/BaseTarget.xcconfig
++++ b/Source/ThirdParty/ANGLE/Configurations/BaseTarget.xcconfig
+@@ -29,7 +29,7 @@ HEADER_SEARCH_PATHS = $(BUILT_PRODUCTS_DIR)$(WK_LIBRARY_HEADERS_FOLDER_PATH) $(A
+ 
+ USE_HEADERMAP = NO;
+ 
+-GCC_PREPROCESSOR_DEFINITIONS = $(inherited) $(DEBUG_DEFINES) $(WK_OS_UNFAIR_LOCK_INLINE_CFLAGS) LIBGLESV2_IMPLEMENTATION LIBANGLE_IMPLEMENTATION ANGLE_CAPTURE_ENABLED=0 ANGLE_ENABLE_METAL ANGLE_METAL_XCODE_BUILDS_SHADERS ANGLE_ENABLE_METAL_OWNERSHIP_IDENTITY $(GCC_PREPROCESSOR_DEFINITIONS_$(WK_PLATFORM_NAME)) $(GCC_PREPROCESSOR_DEFINITIONS_LIBFUZZER_$(ENABLE_LIBFUZZER));
++GCC_PREPROCESSOR_DEFINITIONS = $(inherited) $(DEBUG_DEFINES) $(WK_OS_UNFAIR_LOCK_INLINE_CFLAGS) LIBGLESV2_IMPLEMENTATION LIBANGLE_IMPLEMENTATION ANGLE_CAPTURE_ENABLED=0 ANGLE_ENABLE_METAL ANGLE_METAL_XCODE_BUILDS_SHADERS ANGLE_ENABLE_METAL_OWNERSHIP_IDENTITY GL_GLES_PROTOTYPES=1 EGL_EGL_PROTOTYPES=1 GL_GLEXT_PROTOTYPES=1 EGL_EGLEXT_PROTOTYPES=1 $(GCC_PREPROCESSOR_DEFINITIONS_$(WK_PLATFORM_NAME)) $(GCC_PREPROCESSOR_DEFINITIONS_LIBFUZZER_$(ENABLE_LIBFUZZER));
+ 
+ GCC_PREPROCESSOR_DEFINITIONS_maccatalyst[arch=arm*] = ANGLE_CPU_ARM64;
+ GCC_PREPROCESSOR_DEFINITIONS_xros = ANGLE_WEBKIT_EXPLICIT_RESOLVE_TARGET_ENABLED=1;
+diff --git a/Source/ThirdParty/ANGLE/include/KHR/khrplatform.h b/Source/ThirdParty/ANGLE/include/KHR/khrplatform.h
+index dd22d927018..6993fdac5d2 100644
+--- a/Source/ThirdParty/ANGLE/include/KHR/khrplatform.h
++++ b/Source/ThirdParty/ANGLE/include/KHR/khrplatform.h
+@@ -107,7 +107,7 @@
+ #   define KHRONOS_APICALL __declspec(dllimport)
+ #elif defined (__SYMBIAN32__)
+ #   define KHRONOS_APICALL IMPORT_C
+-#elif defined(__ANDROID__)
++#elif defined(__ANDROID__) || defined(__APPLE__)
+ #   define KHRONOS_APICALL __attribute__((visibility("default")))
+ #else
+ #   define KHRONOS_APICALL
