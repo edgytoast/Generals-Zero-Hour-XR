@@ -920,12 +920,15 @@ static void casePerf()
 		if (!makeSlot(&f, 1024, 1024, m.atlas)) { check(false, "%s: slot created", m.name); continue; }
 		FrameOptions o; o.elide = m.elide; o.worldDraws = 200;
 		for (int i = 0; i < 4; ++i) runFrame(&f, o, tex); // warm up: shaders, layers, elision certification
-		const int frames = 20;
+		const int frames = 15, batches = 5; // best batch mean: the machine is shared, the minimum is the least disturbed
 		FrameResult last;
-		const auto t0 = std::chrono::steady_clock::now();
-		for (int i = 0; i < frames; ++i) last = runFrame(&f, o, tex);
-		const auto t1 = std::chrono::steady_clock::now();
-		m.ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / frames;
+		m.ms = 1e30;
+		for (int b = 0; b < batches; ++b) {
+			const auto t0 = std::chrono::steady_clock::now();
+			for (int i = 0; i < frames; ++i) last = runFrame(&f, o, tex);
+			const auto t1 = std::chrono::steady_clock::now();
+			m.ms = std::min(m.ms, std::chrono::duration<double, std::milli>(t1 - t0).count() / frames);
+		}
 		m.draws = last.drawCalls; m.binds = last.bindCalls;
 		printf("  %-42s %7.2f ms/frame   GL draws/frame %4u   glBindFramebuffer/frame %4u\n", m.name, m.ms, m.draws, m.binds);
 	}

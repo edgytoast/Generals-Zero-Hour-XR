@@ -40,6 +40,20 @@ composite the slot's MTLTextures after the event
 | Linked libraries | `d3d8lib sdl3lib ${CMAKE_DL_LIBS}` (Android: `d3d8lib sdl3lib log`). SDL3 is needed for `SDL_GetTicks` (perf log) and the windowed GL path that XR mode never enters. |
 | GL symbols | Off Android the wrappers in `gles_dispatch.cpp` are named `d3d8gles_gl*` (`src/gles_symbols.h`), so they cannot collide with an ANGLE that exports the standard `gl*` names, and a resolver can never recurse into them. On Android they stay the global `gl*` symbols, unchanged. |
 
+Compile status in the merged tree (`visionos-port` with packages A, B, D1, E, G, H; `scripts/build/visionos/build-engine.sh --both -j 4`):
+`d3d8gles`, `z_ww3d2` (library `libww3d2.a`) and `z_gameenginedevice` compile for `xrsimulator` (`platform VISIONOSSIMULATOR`, minos 2.0)
+and `xros` (`platform VISIONOS`, minos 2.0) with **zero** compiler warnings in `d3d8gles/` or `gx_backend.h`, and `z_generals`
+links to `libGeneralsZHEngine.a` for both slices. Two cross-package gaps had to be worked around locally (not committed, they are
+outside this package's files):
+
+1. `GeneralsMD/Code/Libraries/Source/WWVegas/WW3D2/CMakeLists.txt` links `d3d8gles` into `z_ww3d2` only `if(ANDROID)`; `render2d.cpp` and
+   `dx8wrapper.cpp` include `d3d8gles.h`, so the visionOS build stops with `'d3d8gles.h' file not found`. Fix (one line):
+   `if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "visionOS")`.
+2. `GeneralsMD/Code/Main/visionos/VisionInteraction.cpp` includes `XrMath.h`, which includes `<openxr/openxr.h>`; nothing adds
+   `GeneralsMD/Code/Main/visionos/xr_shim` to the include path of `z_generals`. Fix: `target_include_directories(z_generals PRIVATE
+   ${CMAKE_CURRENT_SOURCE_DIR}/visionos/xr_shim)` in the `SAGE_BUILD_VISIONOS_LIB` branch of `GeneralsMD/Code/Main/CMakeLists.txt`
+   (the verification build used `CPLUS_INCLUDE_PATH` pointing at that directory instead).
+
 Shared macros: `Core/Libraries/Source/WWVegas/WWLib/gx_backend.h`
 
 * `GX_XR_HOST` = `defined(__ANDROID__) || defined(GX_PLATFORM_VISIONOS)`: the Quest XR engine hooks
@@ -285,14 +299,19 @@ transfer, millisecond figures are only indicative (and the machine was shared, s
 | `scripts/qa/vision-gles-formats-test.sh` | `bash scripts/qa/vision-gles-formats-test.sh` (host, no GPU; the production conversion functions are extracted verbatim from `gles_pipeline.cpp`; built with `-fsanitize=undefined`) | **PASSED: 48 checks, 0 failures**: DXT1/2/3/4/5 against an independent S3TC reference including punch-through and both DXT5 alpha modes, every uncompressed format, an unimplemented format reported (magenta upload) instead of mis-decoded. |
 | existing `scripts/qa/xr-*-test.*` (41 test names) | Quest host tests built on macOS with `clang++`, `-I GeneralsMD/Code/Main/visionos/xr_shim`, `-static-libstdc++` dropped (Linux-only flag) | **27 pass / 14 fail, identical per test on the pre-change tree (`039512c`, before this package) and after**. The 14 failures are environmental, not regressions: 6 need an Android EGL device (`diorama-device`, `mrt-device`, `multiview-device`, `performance-device`, `terrain-device`, `world-device`), `branding` needs `aapt2` and an APK, `stereo-state`, `uniform-cache` and `world-copy` compile with the d3d8/EGL include paths but link `-lEGL` for an Android device, and `scene`, `interaction`, `loading-presenter`, `menu-routing` include the full OpenXR SDK headers (types such as `XrSession`, `XrCompositionLayerProjection`) that the in-repo `xr_shim` stand-in does not provide. Those four passed in the earlier recon run that had the real SDK, which is where the 31/40 baseline comes from (27 + those 4). |
 
-Measured (simulator GPU under load, indicative): `casePerf` in the device test replays 200 small world draws per
-frame at 1024x1024 per eye:
+Measured (simulator GPU on a heavily loaded machine, best of 5 batches of 15 frames, indicative only): `casePerf` in the device
+test replays 200 small world draws per frame at 1024x1024 per eye. "ms" is wall time of the whole frame including the
+CPU wait on the shared event, so it also contains the (simulated) GPU time:
 
-| Mode | GL draws / frame | `glBindFramebuffer` / frame | CPU ms / frame incl. GPU wait |
+| Mode | GL draws / frame | `glBindFramebuffer` / frame | ms / frame |
 | --- | --- | --- | --- |
-| separate eyes, ordinary world draw kept | PERF_SEP_DRAWS | PERF_SEP_BINDS | PERF_SEP_MS |
-| atlas, ordinary world draw kept | PERF_ATL_DRAWS | PERF_ATL_BINDS | PERF_ATL_MS |
-| atlas, ordinary world draw elided | PERF_ELI_DRAWS | PERF_ELI_BINDS | PERF_ELI_MS |
+| separate eyes, ordinary world draw kept | 601 | 614 | 110 |
+| atlas, ordinary world draw kept | 601 | 413 | 56 |
+| atlas, ordinary world draw elided | 401 | 13 | 27 |
+
+What the table says: elision removes a third of the GL draws and, together with the atlas, cuts framebuffer binds from
+3 per world draw (ordinary FBO + two eye FBOs) to 13 per frame; without elision an atlas still pays 2 binds per world
+draw because the ordinary draw and the eye draws alternate. Prefer atlas + elision (the host's default).
 
 Software DXT decode (host, `-O2`, one 1024x1024 level): DXT1 about 10 ms, DXT5 about 12 ms (roughly 340-410 MB of RGBA
 per second). A full mip chain adds a third. This is the shipping path on ANGLE-Metal and the first thing to
