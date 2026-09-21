@@ -923,7 +923,8 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
             const simd_float3 head = simd_make_float3(info.head_pose.position.x, info.head_pose.position.y, info.head_pose.position.z);
             simd_float3 fwd = simd_make_float3(-info.world_from_head[8], 0.0f, -info.world_from_head[10]);
             if (simd_length(fwd) < 1e-3f) fwd = simd_make_float3(0.0f, 0.0f, -1.0f);
-            _indicatorCenter = head + simd_normalize(fwd) * 0.9f - simd_make_float3(0, 0.05f, 0);
+            // Below the launcher window that normally hangs at the same spot, so it is never hidden behind it.
+            _indicatorCenter = head + simd_normalize(fwd) * 0.9f - simd_make_float3(0, 0.32f, 0);
             _indicatorPlaced = true;
         }
         const simd_float3 viewer = simd_make_float3(info.head_pose.position.x, info.head_pose.position.y, info.head_pose.position.z);

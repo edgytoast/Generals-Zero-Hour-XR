@@ -61,7 +61,7 @@ struct Host {
     double bootStart = 0, bootEnd = 0;
     double engineFps = 0, logicHz = 0;
     bool logicInGame = false;
-    double lastFrameMs = 0, longestFrameMs = 0;
+    double lastFrameMs = 0, longestFrameMs = 0, lastPublishTime = 0;
     std::atomic<uint64_t> produced{0}, skipped{0};
 };
 
@@ -112,12 +112,22 @@ std::string ReadTail(size_t bytes) {
     return out;
 }
 
+// Last log line that says something about the engine: the compositor's / host's once-a-second statistics lines are skipped.
 std::string LastLine(const std::string& text) {
     size_t end = text.size();
-    while (end > 0 && (text[end - 1] == '\n' || text[end - 1] == '\r')) --end;
-    if (end == 0) return {};
-    const size_t begin = text.rfind('\n', end - 1);
-    return text.substr(begin == std::string::npos ? 0 : begin + 1, end - (begin == std::string::npos ? 0 : begin + 1));
+    for (int tries = 0; tries < 40 && end > 0; ++tries) {
+        while (end > 0 && (text[end - 1] == '\n' || text[end - 1] == '\r')) --end;
+        if (end == 0) break;
+        const size_t nl = end > 0 ? text.rfind('\n', end - 1) : std::string::npos;
+        const size_t begin = nl == std::string::npos ? 0 : nl + 1;
+        const std::string line = text.substr(begin, end - begin);
+        const bool noise = line.rfind("[GXXR] pipeline", 0) == 0 || line.rfind("[GXXR] frame loop", 0) == 0 ||
+                           line.rfind("[GXXR] timing", 0) == 0 || line.rfind("[engine-host] engine:", 0) == 0;
+        if (!line.empty() && !noise) return line;
+        if (nl == std::string::npos) break;
+        end = nl;
+    }
+    return {};
 }
 
 // ---- the loop --------------------------------------------------------------------------------------------------
@@ -182,6 +192,7 @@ void EngineThread() {
     double windowStart = Now(), lastLog = windowStart, lastLogicSample = windowStart;
     uint64_t windowFrames = 0;
     bool loggedWaiting = false;
+    double nextDeadline = Now();
     while (!h.stop.load()) {
         RunPosted(h);
         const uint32_t mask = h.pauseMask.load();
@@ -241,6 +252,7 @@ void EngineThread() {
         ++windowFrames;
         {
             std::lock_guard<std::mutex> lock(h.mutex);
+            h.lastPublishTime = t1;
             h.lastFrameMs = (t1 - t0) * 1000.0;
             h.longestFrameMs = std::max(h.longestFrameMs, h.lastFrameMs);
         }
@@ -248,9 +260,11 @@ void EngineThread() {
 
         // Fake clients are paced here; the real engine's FramePacer sleeps inside the frame.
         if (!h.client.selfPaced && h.client.fpsCap > 0) {
+            // Deadline schedule (not "sleep the remainder"): a late wake-up does not lower the average rate.
             const double target = 1.0 / h.client.fpsCap;
-            const double spent = Now() - t0;
-            if (spent < target) [NSThread sleepForTimeInterval:target - spent];
+            nextDeadline = std::max(nextDeadline + target, t1 - target);  // never try to catch up more than one frame
+            const double wait = nextDeadline - Now();
+            if (wait > 0) [NSThread sleepForTimeInterval:wait];
         }
 
         const double now = Now();
@@ -489,7 +503,7 @@ void GXEngineHost_GetStatus(GXEngineHostStatus* out) {
         logPath = h.logPath;
         const double end = h.bootEnd > 0 ? h.bootEnd : (h.bootStart > 0 && out->phase == GX_ENGINE_BOOTING ? Now() : h.bootStart);
         out->bootSeconds = h.bootStart > 0 ? std::max(0.0, end - h.bootStart) : 0;
-        out->engineFps = h.engineFps;
+        out->engineFps = (Now() - h.lastPublishTime < 1.5) ? h.engineFps : 0.0;  // decays while the engine is stalled / parked
         out->logicHz = h.logicHz;
         out->logicInGame = h.logicInGame;
         out->lastFrameMs = h.lastFrameMs;
