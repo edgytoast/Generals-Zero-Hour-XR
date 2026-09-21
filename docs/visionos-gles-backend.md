@@ -136,6 +136,15 @@ Never `glReadPixels` a host-wrapped texture: ANGLE calls `-[MTLTexture getBytes:
 Private storage and takes the Metal host down on the simulator. The backend follows the rule itself
 (section 4.3); host-side inspection must be a Metal blit into a Shared buffer.
 
+### 3.3.1 Complete list of API additions (everything else in `d3d8gles.h` is unchanged)
+
+| Where | Addition |
+| --- | --- |
+| `d3d8gles.h` | `D3D8GLES_XRConfig::getProcAddress`, `::flags` (appended); `D3D8GLES_XRFLAG_NO_MULTIVIEW`, `D3D8GLES_XRFLAG_FORCE_ATLAS`; `enum D3D8GLES_XRT_*`; `struct D3D8GLES_XRHostTarget`; `struct D3D8GLES_XRTargets`; `d3d8gles_SetXRHostTargets`; `d3d8gles_ShouldUseVulkanBackend` / `d3d8gles_ShouldUseANGLE` now exist on every platform (constant `false` off Android). |
+| `gles_dispatch.h` | `bool d3d8gles_LoadGLESDispatchFromResolver(void *(*getProcAddress)(const char *))`; `glReadBuffer` joined the dispatch table (92 entry points). Off Android the wrappers are `d3d8gles_gl*` (`gles_symbols.h`). |
+| `d3d8gles_XRStereoTexture / GetXRWorldTexture / GetXRUITexture / GetGameTexture / XRStereoAtlas` | semantics extended, signatures unchanged: they return the host-supplied names when host targets are in use. |
+| environment | `D3D8GLES_DISABLE_S3TC=1` forces the software DXT path on a GPU that does expose S3TC (test switch; ANGLE-Metal on visionOS never has it). |
+
 ### 3.4 Symbols the host must define
 
 Widening the engine hooks to `GX_XR_HOST` makes the engine reference the same host entry points the Quest
@@ -264,12 +273,30 @@ With a host resolver the three varyings are now `highp` (`gles_pipeline.cpp`, fr
 generator); Android keeps the original declarations. The device test measures the raw ANGLE behaviour and
 the backend's shaders on a 64x-repeated ramp.
 
-## 7. Tests
+## 7. Tests and measured results
 
-| Test | How to run | What it proves |
+All numbers below were produced on the development Mac (Apple M5, visionOS 26.5 simulator runtime, Xcode 27),
+never on a Vision Pro. The simulator GPU is a host Metal device behind a simulated runtime: correctness results
+transfer, millisecond figures are only indicative (and the machine was shared, so they are noisy).
+
+| Test | How to run | Result |
 | --- | --- | --- |
-| `scripts/qa/vision-gles-device-test.sh` (`vision-gles-device-test.mm`, `vision-gles-device-cases.cpp`, `vision-gles-harness.h`, `vision-gles-sdl-stubs.cpp`) | `scripts/qa/vision-gles-device-test.sh --udid <own simulator UDID>` (`--build-only` to just build) | ANGLE Metal EGL display + surfaceless ES3 context; Private MTLTextures on ANGLE's device wrapped through EGLImage; `d3d8gles_SetXRConfig(getProcAddress)`; `Direct3DCreate8_GLES`/`CreateDevice`; lit textured fixed-function geometry per eye through `BeginXRStereo/EndXRStereo` in separate-eye and atlas modes; ring rotation; backend-allocated fallback; world/UI/GAME slots; elision without multiview and the FBO-bind count; DXT1/3/5 decode; every texture format; the precision probe; verified with Metal blit readback only. |
-| existing `scripts/qa/xr-*-test.*` | macOS host build (recipe in the recon report `xr-host.md` section 7) | Quest host logic is unchanged by this package: the same 31 tests pass before and after. |
+| `scripts/qa/vision-gles-device-test.sh` (`vision-gles-device-test.mm`, `vision-gles-device-cases.cpp`, `vision-gles-harness.h`, `vision-gles-sdl-stubs.cpp`) | `scripts/qa/vision-gles-device-test.sh --udid <own simulator UDID>` (`--build-only` builds only; `--macos` is a harness debugging aid, not evidence about visionOS) | **PASSED: 90 checks, 0 failures**, run with `xcrun simctl spawn` inside the visionOS 26.5 simulator, renderer `ANGLE (Apple, ANGLE Metal Renderer: Apple xrOS simulator GPU)`, `OpenGL ES 3.0 (ANGLE 2.1.28778)`. Cases: API surface; separate-eye stereo (Private MTLTextures wrapped through EGLImage, lit textured fixed-function quad, per-eye clip matrices, texel-row convention, transparent surround, per-eye parallax, N.L = 0.5 lighting); atlas (both eyeRects, no leakage across the scissor); board clipping (tabletop board bounds discard fragments, `aspect == -1` observer mode does not); ring rotation (slot A untouched by frame 2, names re-attached in frame 3); backend-allocated fallback; world/UI/GAME slots with elision without multiview (24 world draws omitted, 13 FBO binds per frame regardless of draw count); DXT1/3/5; eight texture formats; `mediump` probe; cost of the stereo path. All pixels verified through Metal blits into Shared buffers; `glReadPixels` is never called on a wrapped texture. |
+| `scripts/qa/vision-gles-formats-test.sh` | `bash scripts/qa/vision-gles-formats-test.sh` (host, no GPU; the production conversion functions are extracted verbatim from `gles_pipeline.cpp`; built with `-fsanitize=undefined`) | **PASSED: 48 checks, 0 failures**: DXT1/2/3/4/5 against an independent S3TC reference including punch-through and both DXT5 alpha modes, every uncompressed format, an unimplemented format reported (magenta upload) instead of mis-decoded. |
+| existing `scripts/qa/xr-*-test.*` (41 test names) | Quest host tests built on macOS with `clang++`, `-I GeneralsMD/Code/Main/visionos/xr_shim`, `-static-libstdc++` dropped (Linux-only flag) | **27 pass / 14 fail, identical per test on the pre-change tree (`039512c`, before this package) and after**. The 14 failures are environmental, not regressions: 6 need an Android EGL device (`diorama-device`, `mrt-device`, `multiview-device`, `performance-device`, `terrain-device`, `world-device`), `branding` needs `aapt2` and an APK, `stereo-state`, `uniform-cache` and `world-copy` compile with the d3d8/EGL include paths but link `-lEGL` for an Android device, and `scene`, `interaction`, `loading-presenter`, `menu-routing` include the full OpenXR SDK headers (types such as `XrSession`, `XrCompositionLayerProjection`) that the in-repo `xr_shim` stand-in does not provide. Those four passed in the earlier recon run that had the real SDK, which is where the 31/40 baseline comes from (27 + those 4). |
+
+Measured (simulator GPU under load, indicative): `casePerf` in the device test replays 200 small world draws per
+frame at 1024x1024 per eye:
+
+| Mode | GL draws / frame | `glBindFramebuffer` / frame | CPU ms / frame incl. GPU wait |
+| --- | --- | --- | --- |
+| separate eyes, ordinary world draw kept | PERF_SEP_DRAWS | PERF_SEP_BINDS | PERF_SEP_MS |
+| atlas, ordinary world draw kept | PERF_ATL_DRAWS | PERF_ATL_BINDS | PERF_ATL_MS |
+| atlas, ordinary world draw elided | PERF_ELI_DRAWS | PERF_ELI_BINDS | PERF_ELI_MS |
+
+Software DXT decode (host, `-O2`, one 1024x1024 level): DXT1 about 10 ms, DXT5 about 12 ms (roughly 340-410 MB of RGBA
+per second). A full mip chain adds a third. This is the shipping path on ANGLE-Metal and the first thing to
+optimise (NEON, or transcoding to ASTC/ETC2 offline) if level load time misses.
 
 ## 8. Open items
 
