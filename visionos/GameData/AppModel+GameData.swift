@@ -227,6 +227,8 @@ extension AppModel {
     func handlePickerResult(_ result: Result<[URL], Error>) {
         switch result {
         case .failure(let error):
+            // Dismissing the picker is not an error.
+            if let cocoa = error as? CocoaError, cocoa.code == .userCancelled { return }
             notice("The folder could not be opened: \(error.localizedDescription)", error: true)
         case .success(let urls):
             guard let url = urls.first else { return }
@@ -381,6 +383,8 @@ extension AppModel {
             if UserDefaults.standard.string(forKey: Keys.activeSource) == GameDataSource.imported.rawValue {
                 UserDefaults.standard.removeObject(forKey: Keys.activeSource)
             }
+            clearImportSource()
+            interruptedImport = nil
             notice("Imported game data removed.")
             await evaluateAvailableData()
         }
