@@ -16,7 +16,7 @@ static unsigned checks=0,uploads=0;
 static void check(bool b,const char *why){++checks;if(!b){fprintf(stderr,"FAIL %s GL=%x\n",why,glGetError());exit(1);}}
 static unsigned SDL_GetTicks(){return 0;}
 // Exclude the opt-in diagnostic camera wobble marker, not normal uniforms.
-static FILE *noCameraMarker(const char *,const char *){return nullptr;}
+[[maybe_unused]] static FILE *noCameraMarker(const char *,const char *){return nullptr;}
 static void matrix(GLint a,GLsizei b,GLboolean c,const GLfloat *d){++uploads;glUniformMatrix4fv(a,b,c,d);}
 static void fourv(GLint a,GLsizei b,const GLfloat *c){++uploads;glUniform4fv(a,b,c);}
 static void threev(GLint a,GLsizei b,const GLfloat *c){++uploads;glUniform3fv(a,b,c);}
@@ -51,6 +51,7 @@ struct WebGLPipeline {
  bool m_xrMode=true,m_ctxReady=true,m_haveLastVAOKey=false,m_haveFixedStateKey=false;
  GLuint m_lastProgram=0,m_viewProjUBO=0,m_curFBO=0,m_offFBO=0,m_lastArrayBuffer=0,m_lastBoundTex[2]={};
  float m_yFlip=1;
+ bool m_xrEyeFBOLeft=false;GLuint m_xrBoundEyeFBO=0; // visionOS lazy eye-FBO restore bookkeeping (inert: Android fixture)
  int m_perfUniformCacheHits=0,m_perfUniformCacheMisses=0;
  int m_perfUniformViewProjHits=0,m_perfUniformViewProjMisses=0,m_perfUniformTexMatHits=0,m_perfUniformTexMatMisses=0;
  int m_perfUniformMiscHits=0,m_perfUniformMiscMisses=0,m_perfUniformMaterialHits=0,m_perfUniformMaterialMisses=0,m_perfUniformLightingHits=0,m_perfUniformLightingMisses=0;

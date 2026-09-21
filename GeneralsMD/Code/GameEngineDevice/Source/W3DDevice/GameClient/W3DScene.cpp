@@ -33,6 +33,8 @@
 
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 #include <stdlib.h>
+// GeneralsX @feature visionOS port: GX_XR_HOST / GX_USES_D3D8GLES replace the bare __ANDROID__ tests below.
+#include "gx_backend.h"
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
 #include "Lib/BaseType.h"
@@ -464,7 +466,7 @@ void RTS3DScene::Visibility_Check(CameraClass * camera)
 			} else {
 
 				bool isVisible=!camera->Cull_Sphere(robj->Get_Bounding_Sphere());
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 				// GeneralsX @feature Codex 13/09/2026 Table volume covers both
 				// eyes. Keep the existing fog/hidden checks below unchanged.
 				extern int GX_XR_CullSphere(const SphereClass &);

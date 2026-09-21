@@ -27,6 +27,8 @@
 // Author: Michael S. Booth, April 2001
 
 #include "PreRTS.h"	// This must go first in EVERY cpp file in the GameEngine
+// GeneralsX @feature visionOS port: GX_XR_HOST / GX_USES_D3D8GLES replace the bare __ANDROID__ tests below.
+#include "gx_backend.h"
 
 #include "Common/FramePacer.h"
 #include "Common/GameType.h"
@@ -136,13 +138,14 @@ void LookAtTranslator::stopScrolling()
 //-----------------------------------------------------------------------------
 Bool LookAtTranslator::canScrollAtScreenEdge() const
 {
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 	// GeneralsX @bugfix Codex 13/09/2026 A tracked ray can leave the panel
 	// entirely. Keep XR camera movement on its explicit stick/grip controls
 	// so the last edge pixel cannot start a scroll after tracking is lost.
 	extern bool GX_XR_OffscreenBoot;
 	if (GX_XR_OffscreenBoot) return false;
 #endif
+// GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT): no screen-edge scroll from a resting pointer; the XR host case above already returns early, and the fall-through keeps the real-pointer exception.
 #if defined(__ANDROID__) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
 	// GeneralsX @bugfix Android port 06/09/2026 Never on a touchscreen.
 	//

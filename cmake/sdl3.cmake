@@ -30,14 +30,42 @@ if(SAGE_USE_SDL3)
     )
     
     # Configure SDL3 build options
+    if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+        # GeneralsX @build visionOS port: SDL3 is linked STATICALLY into the host
+        # app (no dylib to embed and re-sign). The app (SwiftUI + Compositor
+        # Services) owns windowing and rendering, and the engine boots offscreen
+        # (SDL events, timers and iconv only), so the whole video stack is off.
+        # This is also required to build at all: SDL 3.4.2's UIKit video driver
+        # does not compile against the xros SDK
+        # (SDL_uikitwindow.m: application:supportedInterfaceOrientationsForWindow:
+        # is unavailable on visionOS). Audio stays on (its CoreAudio driver
+        # compiles; OpenAL is what the game uses). Without the UIKit driver
+        # SDL_IsIPad / SDL_IsAppleTV are undefined; the engine library supplies
+        # them (GeneralsMD/Code/Main/SDLVisionStubs.cpp).
+        set(SDL_SHARED OFF CACHE BOOL "SDL3 is linked statically on visionOS" FORCE)
+        set(SDL_STATIC ON CACHE BOOL "SDL3 is linked statically on visionOS" FORCE)
+        set(SDL_VIDEO OFF CACHE BOOL "UIKit video driver does not build for visionOS; host owns windowing" FORCE)
+        set(SDL_RENDER OFF CACHE BOOL "No SDL renderer on visionOS" FORCE)
+        set(SDL_GPU OFF CACHE BOOL "No SDL GPU API on visionOS" FORCE)
+        set(SDL_JOYSTICK OFF CACHE BOOL "Input is injected by the host app" FORCE)
+        set(SDL_HAPTIC OFF CACHE BOOL "Input is injected by the host app" FORCE)
+        set(SDL_SENSOR OFF CACHE BOOL "Not used" FORCE)
+        set(SDL_HIDAPI OFF CACHE BOOL "No HIDAPI on visionOS" FORCE)
+        set(SDL_VULKAN OFF CACHE BOOL "No Vulkan on visionOS" FORCE)
+        set(SDL_METAL OFF CACHE BOOL "Host app owns Metal" FORCE)
+        set(SDL_OPENGLES OFF CACHE BOOL "OpenGL ES is unavailable on visionOS (ANGLE is used)" FORCE)
+    else()
     set(SDL_SHARED ON CACHE BOOL "Build SDL3 as shared library" FORCE)
     set(SDL_STATIC OFF CACHE BOOL "Don't build static library" FORCE)
+    endif()
     set(SDL_AUDIO ON CACHE BOOL "Enable audio subsystem" FORCE)
     set(SDL_TIMERS ON CACHE BOOL "Enable timers" FORCE)
     set(SDL_EVENTS ON CACHE BOOL "Enable events" FORCE)
     set(SDL_FILESYSTEM ON CACHE BOOL "Enable filesystem" FORCE)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "visionOS")
     set(SDL_RENDER ON CACHE BOOL "Enable render subsystem" FORCE)
     set(SDL_VIDEO ON CACHE BOOL "Enable video subsystem" FORCE)
+    endif()
     
     # Platform support
     set(SDL_WAYLAND ON CACHE BOOL "Enable Wayland support (Linux)" FORCE)
@@ -51,8 +79,8 @@ if(SAGE_USE_SDL3)
     # Before SDL3_image build: force PNG discovery to platform-specific libpng
     # Linux: System libpng16.so is dynamic shared library
     # macOS: Use Homebrew PNG or system framework
-    if(CMAKE_SYSTEM_NAME STREQUAL "iOS" OR ANDROID)
-        # iOS/Android: no shared system libpng exists for the target and SDL3_image
+    if(CMAKE_SYSTEM_NAME STREQUAL "iOS" OR CMAKE_SYSTEM_NAME STREQUAL "visionOS" OR ANDROID)
+        # iOS/visionOS/Android: no shared system libpng exists for the target and SDL3_image
         # rejects a static one. Disable its libpng backend entirely — PNG decoding
         # still works through the stb backend (and Apple ImageIO on iOS).
         # GeneralsX @build Android port 06/07/2026 Android joins the iOS path: the

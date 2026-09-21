@@ -2,8 +2,15 @@
 # of its own: SDL3's Java shell (SDLActivity in android/) loads the game as a
 # shared library named libmain.so and calls its SDL_main. Everywhere else the
 # game remains a regular executable.
+# GeneralsX @build visionOS port: on visionOS the engine is a STATIC library
+# (libGeneralsZHEngine.a) linked into the SwiftUI + Compositor Services host app,
+# which owns main(), the run loop and the frame pump; the target NAME stays
+# z_generals so every existing reference to it (root CMakeLists, install rules,
+# presets) keeps working. See GeneralsMD/Code/Main/visionos/README.md.
 if(ANDROID)
     add_library(z_generals SHARED)
+elseif(SAGE_BUILD_VISIONOS_LIB)
+    add_library(z_generals STATIC)
 else()
     add_executable(z_generals WIN32)
 endif()
@@ -15,6 +22,11 @@ if("${CMAKE_SYSTEM}" MATCHES "Windows")
 elseif(ANDROID)
     # SDLActivity.getLibraries() loads "main" -> libmain.so (SDL convention)
     set_target_properties(z_generals PROPERTIES OUTPUT_NAME main)
+elseif(SAGE_BUILD_VISIONOS_LIB)
+    # libGeneralsZHEngine.a (merged with its dependencies into
+    # libGeneralsZHEngine_all.a by scripts/build/visionos/make-xcframework.sh)
+    set_target_properties(z_generals PROPERTIES OUTPUT_NAME GeneralsZHEngine
+                                                POSITION_INDEPENDENT_CODE ON)
 else()
     # GeneralsX @build BenderAI 15/02/2026 Linux branding update
     set_target_properties(z_generals PROPERTIES OUTPUT_NAME GeneralsXZH)
@@ -36,8 +48,18 @@ if(WIN32)
     )
 endif()
 
+# GeneralsX @build visionOS port: the static engine library links its libraries
+# PUBLIC, so that the host app sees their include directories and the merge script
+# can walk the whole transitive static closure (see z_generals_link_probe below).
+# Every other target keeps the original PRIVATE linkage.
+if(SAGE_BUILD_VISIONOS_LIB)
+    set(_z_generals_scope PUBLIC)
+else()
+    set(_z_generals_scope PRIVATE)
+endif()
+
 # Cross-platform core libraries
-target_link_libraries(z_generals PRIVATE
+target_link_libraries(z_generals ${_z_generals_scope}
     core_profile_legacy
     d3dx8
     z_gameengine
@@ -48,7 +70,7 @@ target_link_libraries(z_generals PRIVATE
 # Linux SDL3 windowing/input (Phase 1)
 # GeneralsX @build BenderAI 11/02/2026
 if(SAGE_USE_SDL3)
-    target_link_libraries(z_generals PRIVATE sdl3lib)
+    target_link_libraries(z_generals ${_z_generals_scope} sdl3lib)
 endif()
 
 # GeneralsX @feature Android port 10/07/2026 libadrenotools (custom Vulkan
@@ -67,6 +89,20 @@ endif()
 # switch in dx8wrapper.cpp.
 if(ANDROID)
     target_link_libraries(z_generals PRIVATE d3d8gles)
+endif()
+
+# GeneralsX @build visionOS port: the same statically linked D3D8 -> GLES3 backend
+# (d3d8gles), here running on ANGLE's Metal backend instead of a native GLES
+# driver. The d3d8gles target is defined by Core/Libraries/Source/d3d8gles (added
+# before this directory); link it when it exists and say so when it does not, so
+# the archive of an engine without a renderer is never mistaken for a complete one.
+if(SAGE_BUILD_VISIONOS_LIB)
+    if(TARGET d3d8gles)
+        target_link_libraries(z_generals PUBLIC d3d8gles)
+    else()
+        message(WARNING "visionOS: target d3d8gles does not exist; libGeneralsZHEngine will have no D3D8 backend "
+                        "(Direct3DCreate8_GLES stays undefined until Core/Libraries/Source/d3d8gles supports visionOS).")
+    endif()
 endif()
 
 # GeneralsX @spike XR port Phase 0.4 - OpenXR loader (vcpkg openxr-loader,
@@ -122,7 +158,12 @@ target_sources(z_generals PRIVATE
     $<$<BOOL:${WIN32}>:WinMain.cpp>
     $<$<BOOL:${WIN32}>:WinMain.h>
     # Linux SDL3 entry point (Phase 1.5 - TheSuperHackers @build 10/02/2026)
-    $<$<NOT:$<BOOL:${WIN32}>>:SDL3Main.cpp>
+    # Not part of the visionOS static library: it defines main(), the Vulkan ICD
+    # picker and the SDL window bootstrap; the host app replaces all of that.
+    $<$<AND:$<NOT:$<BOOL:${WIN32}>>,$<NOT:$<BOOL:${SAGE_BUILD_VISIONOS_LIB}>>>:SDL3Main.cpp>
+    # GeneralsX @build visionOS port: globals + CreateGameEngine() the engine
+    # libraries link-depend on, moved out of SDL3Main.cpp (pure move, see the file).
+    $<$<NOT:$<BOOL:${WIN32}>>:EngineGlobals.cpp>
     # Linux stubs for P2-P3 platform functions (P2-P3 - TheSuperHackers @build 13/02/2026 BenderAI Session 37)
     $<$<NOT:$<BOOL:${WIN32}>>:LinuxStubs.cpp>
     # GeneralsX @build Android port 07/07/2026 Installs as soon as libmain.so is
@@ -198,4 +239,70 @@ if(ANDROID)
     target_link_options(z_generals PRIVATE
         "-Wl,--version-script,${_gx_hide_alloc_map}"
     )
+endif()
+
+# ---------------------------------------------------------------------------------------
+# GeneralsX @build visionOS port: sources and helper targets of the static engine library
+# ---------------------------------------------------------------------------------------
+if(SAGE_BUILD_VISIONOS_LIB)
+    # SDL3 is built with SDL_VIDEO=OFF, see SDLVisionStubs.cpp.
+    target_sources(z_generals PRIVATE SDLVisionStubs.cpp)
+
+    # The host boundary and the C++ game boot (VisionGameBoot.cpp, GXEngineHost.mm, ...)
+    # live in visionos/ and are added by the packages that own them; CONFIGURE_DEPENDS
+    # re-globs on every build so a new file there needs no CMake edit. The directory
+    # currently holds only a README.md, in which case nothing is added.
+    file(GLOB _visionos_sources CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/visionos/*.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/visionos/*.mm")
+    if(_visionos_sources)
+        target_sources(z_generals PRIVATE ${_visionos_sources})
+    endif()
+    # Objective-C++ needs its own language enabled; do it only when a .mm file is
+    # actually present, so a plain C++ engine archive does not pay for the extra
+    # compiler probe. (A .mm added later triggers a re-configure through the glob.)
+    set(_visionos_has_mm FALSE)
+    foreach(_src IN LISTS _visionos_sources)
+        if(_src MATCHES "\\.mm$")
+            set(_visionos_has_mm TRUE)
+        endif()
+    endforeach()
+    if(_visionos_has_mm)
+        enable_language(OBJCXX)
+        set(CMAKE_OBJCXX_STANDARD 20)
+        set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+        # ARC for the bridge; the C++ engine sources are not Objective-C and unaffected.
+        target_compile_options(z_generals PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+    endif()
+
+    # SDL's main-callback helper (src/main/ios/SDL_sysmain_callbacks.m) uses CADisplayLink,
+    # which lives in QuartzCore; SDL3's own CMake does not declare that framework. It is
+    # only linked when something pulls that member in (an -ObjC host link), but then the
+    # framework must be there. The host app links QuartzCore anyway.
+    target_link_libraries(z_generals PUBLIC "-framework QuartzCore")
+
+    # Public headers for host code that includes engine headers (BaseType.h etc.).
+    target_include_directories(z_generals PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/visionos)
+
+    # ANGLE headers (EGL / GLES3 / the EGL_ANGLE_metal_texture_client_buffer extension
+    # headers) for the code in this library that talks to ANGLE. GX_ANGLE_INCLUDE_DIR is
+    # resolved in cmake/platform.cmake from the ANGLE install of the selected sysroot.
+    if(GX_ANGLE_INCLUDE_DIR AND EXISTS "${GX_ANGLE_INCLUDE_DIR}")
+        target_include_directories(z_generals PUBLIC "${GX_ANGLE_INCLUDE_DIR}")
+    endif()
+
+    # Never-built probe executable. Its only purpose is to make CMake/Ninja generate the
+    # FULL resolved link line of everything z_generals needs (all static archives,
+    # including the vcpkg ones, in link order, plus frameworks and -l flags).
+    # make-xcframework.sh reads that line with `ninja -t commands z_generals_link_probe`
+    # to merge the transitive static closure into libGeneralsZHEngine_all.a and to record
+    # the system frameworks the host app must add. EXCLUDE_FROM_ALL: it would not link
+    # (renderer and boot symbols come from other packages and the host).
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/z_generals_link_probe.cpp"
+        "// generated: see GeneralsMD/Code/Main/CMakeLists.txt\nint main() { return 0; }\n")
+    add_executable(z_generals_link_probe EXCLUDE_FROM_ALL
+        "${CMAKE_CURRENT_BINARY_DIR}/z_generals_link_probe.cpp")
+    target_link_libraries(z_generals_link_probe PRIVATE z_generals)
 endif()

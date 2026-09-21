@@ -33,6 +33,8 @@
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
 #include "always.h"
+// GeneralsX @feature visionOS port: GX_XR_HOST / GX_USES_D3D8GLES replace the bare __ANDROID__ tests below.
+#include "gx_backend.h"
 #include "GameClient/View.h"
 #include "WW3D2/camera.h"
 #include "WW3D2/light.h"
@@ -56,7 +58,7 @@
 #include "GameClient/Drawable.h"
 #include "W3DDevice/GameClient/Module/W3DModelDraw.h"
 #include "W3DDevice/GameClient/W3DShadow.h"
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 // GeneralsX @perf Android port 09/05/2026 - draw-category hook. Forward-declared
 // rather than including d3d8gles.h: that header is not on the gameenginedevice
 // target's include path, and everything links into the same libmain.so.
@@ -1326,7 +1328,7 @@ void W3DProjectedShadowManager::prepareShadows()
 
 Int W3DProjectedShadowManager::renderShadows(RenderInfoClass & rinfo)
 {
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 	const int gxPrevCat = d3d8gles_SetDrawCategory(D3D8GLES_DRAWCAT_SHADOWS);
 	struct GxCatRestore { int prev; ~GxCatRestore() { d3d8gles_SetDrawCategory(prev); } } gxCatRestore{gxPrevCat};
 #endif
@@ -1742,7 +1744,7 @@ W3DProjectedShadow* W3DProjectedShadowManager::addShadow(RenderObjClass *robj, S
 
 
 	bool createDecals=TheGlobalData->m_useShadowDecals;
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 	// GeneralsX @feature Codex 13/09/2026 Load decals before stereo is
 	// enabled, without changing the ordinary Android graphics preferences.
 	extern bool GX_XR_OffscreenBoot;createDecals=createDecals || GX_XR_OffscreenBoot;

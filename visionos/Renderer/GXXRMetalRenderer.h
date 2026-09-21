@@ -14,7 +14,35 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+/// A texture presented as a world-anchored quad (the engine's UI / world / game textures, or any
+/// named host texture). The quad is centered on `position`, oriented by `orientation` (local +Z is
+/// the front face) and is `sizeMeters` wide/high. GL textures are bottom-up: set `flipY`.
+@interface GXXRCompositeLayer : NSObject
+@property(nonatomic, copy) NSString* name;
+@property(nonatomic, strong) id<MTLTexture> texture;
+@property(nonatomic) simd_float3 position;
+@property(nonatomic) simd_quatf orientation;
+@property(nonatomic) simd_float2 sizeMeters;
+@property(nonatomic) BOOL flipY;
+/// Source alpha is premultiplied (default YES: the engine writes premultiplied coverage).
+@property(nonatomic) BOOL premultipliedAlpha;
+/// Source RGB is gamma (sRGB) encoded in a non-sRGB pixel format (default: derived from the texture's
+/// pixel format). Sampling decodes it to linear.
+@property(nonatomic) BOOL gammaEncoded;
+@property(nonatomic, readonly) simd_float4x4 worldFromQuad;
+
++ (instancetype)layerWithName:(NSString*)name
+                      texture:(id<MTLTexture>)texture
+                     position:(simd_float3)position
+                  orientation:(simd_quatf)orientation
+                   sizeMeters:(simd_float2)sizeMeters
+                        flipY:(BOOL)flipY;
+@end
+
 @interface GXXRMetalRenderer : NSObject
+
+/// YES for the *_sRGB pixel formats (hardware decodes on sampling).
++ (BOOL)isSRGBFormat:(MTLPixelFormat)format;
 
 @property(nonatomic, readonly) id<MTLDevice> device;
 @property(nonatomic, readonly) MTLPixelFormat colorFormat;
@@ -48,6 +76,30 @@ NS_ASSUME_NONNULL_BEGIN
                       depth:(id<MTLTexture>)depth
                    viewport:(MTLViewport)viewport
                       clear:(BOOL)clear;
+
+/// Fullscreen composite of (a rectangle of) `source` with a constant reverse-Z depth written for every
+/// pixel with alpha > 0 (0 = far; alpha-0 pixels always keep depth 0 so passthrough shows).
+/// `uvRect` = {originX, originY, width, height} in [0,1] (use {0,0,1,1} for the whole texture; atlas eyes use half).
+- (void)encodeEyeCompositeInto:(id<MTLCommandBuffer>)commandBuffer
+                        source:(id<MTLTexture>)source
+                         flags:(uint32_t)flags
+                        uvRect:(simd_float4)uvRect
+                 constantDepth:(float)constantDepth
+                         color:(id<MTLTexture>)color
+                    colorSlice:(NSUInteger)slice
+                         depth:(id<MTLTexture>)depth
+                      viewport:(MTLViewport)viewport
+                         clear:(BOOL)clear;
+
+/// Draws world-anchored quads (premultiplied blend, reverse-Z depth test + write) into a view's target
+/// with the eye's `clipFromWorld`. Loads the existing color/depth (encode it after the eye composite).
+- (void)encodeLayers:(NSArray<GXXRCompositeLayer*>*)layers
+                into:(id<MTLCommandBuffer>)commandBuffer
+               color:(id<MTLTexture>)color
+          colorSlice:(NSUInteger)slice
+               depth:(id<MTLTexture>)depth
+            viewport:(MTLViewport)viewport
+       clipFromWorld:(simd_float4x4)clipFromWorld;
 
 /// Encodes an empty pass that just clears the target (used when a frame is skipped but the drawable must still be presented).
 - (void)encodeClearInto:(id<MTLCommandBuffer>)commandBuffer

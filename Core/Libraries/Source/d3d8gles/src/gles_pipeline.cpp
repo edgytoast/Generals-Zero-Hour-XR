@@ -323,14 +323,41 @@ bool WebGLPipeline::initContextExternal(int w, int h)
 	// in a normal XR session. Any non-empty value enables the periodic PPM.
 	m_xrCaptureEnabled = getenv("GX_XR_CAPTURE_PPM") != nullptr;
 
-	// Dispatch MUST be system GLES: the XR context comes from system EGL,
-	// and ANGLE entry points against a system context would be garbage.
-	if (!d3d8gles_LoadGLESDispatch("libGLESv3.so")) {
-		fprintf(stderr, "[d3d8gles] FATAL: XR mode requires system libGLESv3.so dispatch\n");
+	// Dispatch MUST come from the implementation that owns the current context.
+	// Quest: the XR context comes from system EGL, and ANGLE entry points against a
+	// system context would be garbage, so the dispatch is forced to system
+	// libGLESv3.so. GeneralsX @feature visionOS port: a host that owns its own
+	// EGL display (ANGLE on Metal) passes its resolver in D3D8GLES_XRConfig and
+	// every entry point loads through it; multiview is never used on that path.
+	const D3D8GLES_XRConfig *xrCfg = d3d8gles_GetXRConfig();
+	m_hostGL = xrCfg != nullptr && xrCfg->getProcAddress != nullptr;
+	m_multiviewAllowed = !m_hostGL && !(xrCfg != nullptr && (xrCfg->flags & D3D8GLES_XRFLAG_NO_MULTIVIEW));
+	m_forceAtlas = xrCfg != nullptr && (xrCfg->flags & D3D8GLES_XRFLAG_FORCE_ATLAS) != 0;
+	if (m_hostGL) {
+		if (!d3d8gles_LoadGLESDispatchFromResolver(xrCfg->getProcAddress)) {
+			fprintf(stderr, "[d3d8gles] FATAL: XR mode could not resolve GL entry points through the host resolver\n");
+			return false;
+		}
+		// glReadPixels on a host-wrapped (Private-storage) texture crashes the Metal host
+		// on the simulator, so the diagnostic readback is unavailable here; use a Metal
+		// blit on the host side to inspect a frame.
+		m_xrCaptureEnabled = false;
+		fprintf(stderr, "[d3d8gles] XR mode: GLES backend via host resolver (multiview off, forceAtlas=%d)\n",
+			(int)m_forceAtlas);
+	} else {
+#if defined(__ANDROID__)
+		if (!d3d8gles_LoadGLESDispatch("libGLESv3.so")) {
+			fprintf(stderr, "[d3d8gles] FATAL: XR mode requires system libGLESv3.so dispatch\n");
+			return false;
+		}
+		fprintf(stderr, "[d3d8gles] XR mode: GLES backend libGLESv3.so (forced), diagnostic capture=%s\n",
+			m_xrCaptureEnabled ? "enabled" : "disabled");
+#else
+		// No system GLES exists here (visionOS): the host must supply its ANGLE resolver.
+		fprintf(stderr, "[d3d8gles] FATAL: XR mode needs D3D8GLES_XRConfig::getProcAddress on this platform\n");
 		return false;
+#endif
 	}
-	fprintf(stderr, "[d3d8gles] XR mode: GLES backend libGLESv3.so (forced), diagnostic capture=%s\n",
-		m_xrCaptureEnabled ? "enabled" : "disabled");
 
 	const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
 	m_hasS3TC = extensions != nullptr &&
@@ -1038,6 +1065,14 @@ WebGLPipeline::ProgramInfo *WebGLPipeline::getProgram(WebGLDevice *dev, unsigned
 	fs += "uniform sampler2D uTex0;\nuniform sampler2D uTex1;\n";
 	fs += "uniform vec4 uTFactor;\nuniform float uAlphaRef;\n";
 	fs += "uniform vec4 uFogColor;\nuniform vec2 uFogParams;\n"; // start, end
+	if (m_hostGL) {
+		// GeneralsX @bugfix visionOS port: ANGLE-Metal translates `mediump` to half (real fp16 on
+		// Apple GPUs). Terrain/decal/UI texture coordinates run far beyond fp16's exact-integer
+		// range (>2048 wraps, and above ~64 the step exceeds 1/16 texel), so they swim; fog
+		// depth spans thousands of world units. Interpolate both at full precision. Android's
+		// Adreno/Mali keep the original mediump declarations.
+		fs += "in vec4 vCol;\nin vec4 vSpec;\nin highp vec2 vUV0;\nin highp vec2 vUV1;\nin highp float vFogDepth;\n";
+	} else
 	fs += "in vec4 vCol;\nin vec4 vSpec;\nin vec2 vUV0;\nin vec2 vUV1;\nin float vFogDepth;\n";
 	fs += "layout(location=0) out vec4 fragColor;\n";
 	if(m_xrMode) fs += "layout(location=1) out vec4 xrUI;\n";
@@ -1887,6 +1922,9 @@ void WebGLPipeline::applyUniforms(WebGLDevice *dev, ProgramInfo *prog, unsigned 
 		{
 			static unsigned s_xrCamCalls = 0;
 			static bool s_xrCamOn = false;
+#if defined(__ANDROID__)
+			// GeneralsX @feature visionOS port: the marker-file probe is an Android/adb tool
+			// (/sdcard is not a path on any other platform); elsewhere the wobble stays off.
 			if ((s_xrCamCalls++ % 600) == 0) {
 				FILE *mk = fopen("/sdcard/Download/GeneralsZH/gx_xr_camoffset.txt", "rb");
 				if (mk) fclose(mk);
@@ -1895,6 +1933,9 @@ void WebGLPipeline::applyUniforms(WebGLDevice *dev, ProgramInfo *prog, unsigned 
 					fprintf(stderr, "[d3d8gles] XR spike: camera wobble %s\n", s_xrCamOn ? "ON" : "OFF");
 				}
 			}
+#else
+			(void)s_xrCamCalls;
+#endif
 			if (s_xrCamOn) {
 				const float t = SDL_GetTicks() / 1000.0f;
 				const float k = 12.0f * sinf(t * 0.6f);
@@ -2317,9 +2358,14 @@ void WebGLPipeline::drawCommon(WebGLDevice *dev, unsigned primType, unsigned pri
 	// GeneralsX @performance Codex 14/09/2026 Omit only an immediate, eligible
 	// world draw with current targets, certified coverage and existing UI MRT.
 	// First allocation/probe, ordinary UI, RTT and non-XR retain their full draw.
+	// GeneralsX @feature visionOS port: without OVR_multiview (ANGLE-Metal) the gate must not
+	// be tied to multiview, or every world draw is submitted three times (ordinary + 2 eyes).
+	// A host-GL stereo target that is active this frame is just as healthy as a multiview one;
+	// Android keeps the exact multiview-only condition.
+	const bool stereoHealthy=(m_xrStereoMultiview && !m_xrMultiviewFailed) || m_hostGL;
 	const bool omit=m_xrElision.canOmit(stereoDraw && !m_xrUI && !m_xrCaptureEnabled,m_xrStereoCoverage,
-		m_xrWorldFBO!=0 && m_xrUITex!=0,m_xrStereoMultiview && !m_xrMultiviewFailed);
-	if(omit)m_xrElision.omit();else submit();
+		m_xrWorldFBO!=0 && m_xrUITex!=0,stereoHealthy);
+	if(omit)m_xrElision.omit();else {leaveXRStereoFBO();submit();}
 	if(stereoDraw) {
 		// GeneralsX @performance Codex 14/09/2026 Submit both array layers now.
 		// A failed variant falls back per draw to ordinary layer FBOs, never
@@ -2362,21 +2408,33 @@ void WebGLPipeline::drawCommon(WebGLDevice *dev, unsigned primType, unsigned pri
 		// GeneralsX @performance Codex 14/09/2026 An atlas keeps both eyes
 		// on one target, without deferring draws that use mutable buffers.
 		glDepthRangef(0,1);
-		if(m_xrStereoAtlas) {glBindFramebuffer(GL_FRAMEBUFFER,m_xrStereoFBO[0]);glEnable(GL_SCISSOR_TEST);}
-		else glViewport(0,0,m_xrStereoW,m_xrStereoH);
+		// GeneralsX @feature visionOS port: host GL binds an eye FBO only when it changes
+		// and leaves it bound (restored lazily by leaveXRStereoFBO); Android binds exactly
+		// as before. Viewports come from m_xrEyeRect, which equals the old hard-wired
+		// {eye*W,0,W,H} / {0,0,W,H} for backend-allocated targets.
+		auto bindEye=[&](GLuint fbo) {
+			if(m_hostGL) {
+				if(m_xrBoundEyeFBO!=fbo) {glBindFramebuffer(GL_FRAMEBUFFER,fbo);m_xrBoundEyeFBO=fbo;}
+				m_xrEyeFBOLeft=true;
+			} else glBindFramebuffer(GL_FRAMEBUFFER,fbo);
+		};
+		if(m_xrStereoAtlas) {bindEye(m_xrStereoFBO[0]);glEnable(GL_SCISSOR_TEST);}
+		else glViewport(m_xrEyeRect[0][0],m_xrEyeRect[0][1],m_xrEyeRect[0][2],m_xrEyeRect[0][3]);
 		if(multiview) {
-			glBindFramebuffer(GL_FRAMEBUFFER,m_xrMultiviewFBO);
+			bindEye(m_xrMultiviewFBO);
 			glUniformMatrix4fv(prog->uXrEyeClip,2,GL_FALSE,m_xrEyeClip[0]);submit();
 		} else for(int eye=0;eye<2;++eye) {
-			if(!m_xrStereoAtlas) glBindFramebuffer(GL_FRAMEBUFFER,m_xrStereoFBO[eye]);
-			const int eyeX=m_xrStereoAtlas ? eye*m_xrStereoW:0;
-			if(m_xrStereoAtlas) {glViewport(eyeX,0,m_xrStereoW,m_xrStereoH);glScissor(eyeX,0,m_xrStereoW,m_xrStereoH);}
+			if(!m_xrStereoAtlas) bindEye(m_xrStereoFBO[eye]);
+			if(m_xrStereoAtlas) {
+				const int *r=m_xrEyeRect[eye];
+				glViewport(r[0],r[1],r[2],r[3]);glScissor(r[0],r[1],r[2],r[3]);
+			}
 			glUniformMatrix4fv(prog->uXrEyeClip,1,GL_FALSE,m_xrEyeClip[eye]);submit();
 		}
 		if(m_xrStereoAtlas) glDisable(GL_SCISSOR_TEST);
 		glUniform1i(prog->uXrActive,0);
 		if(prog!=ordinary) {applyUniforms(dev,ordinary,fvf);bindTextures(dev,ordinary);}
-		glBindFramebuffer(GL_FRAMEBUFFER,m_offFBO);
+		if(!m_hostGL) glBindFramebuffer(GL_FRAMEBUFFER,m_offFBO);
 		// Restore the exact pre-eye state without reissuing untouched depth,
 		// cull, bias and stencil parameters. The full cache remains valid.
 		m_xrRestoreCalls+=gxXrRestoreDrawState(m_lastFixedStateKey,m_curRTHeight,shadow,m_xrUI && m_curFBO==0,d3dBlendToGL);
@@ -2650,6 +2708,7 @@ void WebGLPipeline::drawIndexedUP(WebGLDevice *dev, unsigned primType, unsigned 
 void WebGLPipeline::clear(WebGLDevice *dev, unsigned flags, uint32_t argb, float z, unsigned stencil)
 {
 	if (!m_ctxReady) return;
+	leaveXRStereoFBO(); // host GL: an eye FBO may still be bound from the last stereo draw
 
 	// GeneralsX @feature XR port Phase 1.0 - frames that never call
 	// SetRenderTarget (the menu draws to the implicit default binding) still
@@ -2751,6 +2810,106 @@ void WebGLPipeline::invalidateCachedGLState()
 	} else {
 		glBindFramebuffer(GL_FRAMEBUFFER, m_curFBO);
 	}
+	m_xrEyeFBOLeft = false; // the binding above supersedes any lazily-left eye FBO
+	m_xrBoundEyeFBO = 0;
+}
+
+// GeneralsX @feature visionOS port - see the declaration. Cheap no-op unless the stereo path
+// left an eye FBO bound (host GL only); rebinds the FBO the engine believes is current.
+void WebGLPipeline::leaveXRStereoFBO()
+{
+	if (!m_xrEyeFBOLeft) return;
+	m_xrEyeFBOLeft = false;
+	m_xrBoundEyeFBO = 0;
+	glBindFramebuffer(GL_FRAMEBUFFER, logicalFBO());
+}
+
+// The FBO that must be bound for the engine's current logical target: in XR mode the
+// engine's "backbuffer" (m_curFBO==0) is the owned m_offFBO, never the default framebuffer
+// (which does not exist on a surfaceless ANGLE context).
+GLuint WebGLPipeline::logicalFBO() const
+{
+	return (m_xrMode && m_curFBO == 0 && m_offFBO) ? m_offFBO : m_curFBO;
+}
+
+// ---------------------------------------------------------------------------
+// GeneralsX @feature visionOS port - host-supplied render targets.
+// ---------------------------------------------------------------------------
+
+void WebGLPipeline::setXRHostTargets(const D3D8GLES_XRTargets *targets)
+{
+	if (targets) {
+		m_hostTargets = *targets;
+		m_haveHostTargets = true;
+	} else {
+		m_hostTargets = D3D8GLES_XRTargets{};
+		m_haveHostTargets = false;
+	}
+}
+
+GLuint WebGLPipeline::hostTargetFor(int slot, int w, int h)
+{
+	if (!m_haveHostTargets || slot < 0 || slot >= D3D8GLES_XRT_COUNT) return 0;
+	const D3D8GLES_XRHostTarget &t = m_hostTargets.slot[slot];
+	if (t.glTexture == 0 || t.glTexture == m_hostBadName[slot]) return 0;
+	if (t.width != w || t.height != h) {
+		if (!m_hostTargetWarned[slot]) {
+			m_hostTargetWarned[slot] = true;
+			fprintf(stderr, "[d3d8gles] host target slot %d is %dx%d but the engine needs %dx%d: ignored, backend texture used\n",
+				slot, t.width, t.height, w, h);
+		}
+		return 0;
+	}
+	return t.glTexture;
+}
+
+// Allocates a backend-owned RGBA8 colour texture (the Android path's texture parameters).
+static GLuint gxCreateColorTexture(int w, int h)
+{
+	GLuint name = 0;
+	glGenTextures(1, &name);
+	glBindTexture(GL_TEXTURE_2D, name);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	return name;
+}
+
+// Re-points m_offFBO's colour attachment 0 at the GAME slot's current name (the host may
+// rotate ring slots every frame) or back at a backend texture when the host stopped
+// supplying one. m_offFBO must already exist. Leaves m_offFBO bound.
+void WebGLPipeline::syncHostGameTarget()
+{
+	if (m_offFBO == 0) return;
+	const GLuint want = hostTargetFor(D3D8GLES_XRT_GAME, m_offW, m_offH);
+	GLuint next = m_offColorTex;
+	bool nextOwned = m_offColorOwned;
+	if (want != 0 && want != m_offColorTex) {
+		next = want;
+		nextOwned = false;
+	} else if (want == 0 && !m_offColorOwned) {
+		next = gxCreateColorTexture(m_offW, m_offH);
+		nextOwned = true;
+		m_lastBoundTex[0] = m_lastBoundTex[1] = ~0u;
+	}
+	glBindFramebuffer(GL_FRAMEBUFFER, m_offFBO);
+	if (next == m_offColorTex) return;
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, next, 0);
+	if (m_offColorOwned && m_offColorTex) glDeleteTextures(1, &m_offColorTex);
+	m_offColorTex = next;
+	m_offColorOwned = nextOwned;
+	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE && !m_offColorOwned) {
+		// The host texture cannot be a colour attachment: fall back to a backend texture.
+		WARN_ONCE(s_hostGameIncomplete, "host GAME target %u is not framebuffer-complete; backend texture used", (unsigned)next);
+		m_hostBadName[D3D8GLES_XRT_GAME] = next;
+		const GLuint own = gxCreateColorTexture(m_offW, m_offH);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, own, 0);
+		m_offColorTex = own;
+		m_offColorOwned = true;
+		m_lastBoundTex[0] = m_lastBoundTex[1] = ~0u;
+	}
 }
 
 // GeneralsX @spike XR port Phase 0.2 - see the header comment.
@@ -2765,22 +2924,29 @@ void WebGLPipeline::setOffscreenCapture(bool enabled)
 bool WebGLPipeline::ensureOffscreenTarget()
 {
 	if (m_offFBO != 0 && m_offW == m_fbWidth && m_offH == m_fbHeight) {
-		glBindFramebuffer(GL_FRAMEBUFFER, m_offFBO);
+		// GeneralsX @feature visionOS port: the host may have rotated its ring slot; no-op
+		// (and no extra GL call) without host targets. Leaves m_offFBO bound either way.
+		if (m_hostGL) syncHostGameTarget();
+		else glBindFramebuffer(GL_FRAMEBUFFER, m_offFBO);
 		return true;
 	}
 	destroyXRLayers();
 	if (m_offFBO) { glDeleteFramebuffers(1, &m_offFBO); m_offFBO = 0; }
-	if (m_offColorTex) { glDeleteTextures(1, &m_offColorTex); m_offColorTex = 0; }
+	if (m_offColorTex && m_offColorOwned) { glDeleteTextures(1, &m_offColorTex); }
+	m_offColorTex = 0;
+	m_offColorOwned = true;
 	if (m_offDepthRB) { glDeleteRenderbuffers(1, &m_offDepthRB); m_offDepthRB = 0; }
 	m_offW = m_fbWidth;
 	m_offH = m_fbHeight;
-	glGenTextures(1, &m_offColorTex);
-	glBindTexture(GL_TEXTURE_2D, m_offColorTex);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, m_offW, m_offH, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	// GeneralsX @feature visionOS port: render straight into the host's texture when it
+	// supplied one of the right size; otherwise (always on Android) allocate our own.
+	const GLuint hostColor = hostTargetFor(D3D8GLES_XRT_GAME, m_offW, m_offH);
+	if (hostColor) {
+		m_offColorTex = hostColor;
+		m_offColorOwned = false;
+	} else {
+		m_offColorTex = gxCreateColorTexture(m_offW, m_offH);
+	}
 	// Keep the sampler-bind cache honest (same reason as the render-target path).
 	m_lastBoundTex[0] = m_lastBoundTex[1] = ~0u;
 	glGenFramebuffers(1, &m_offFBO);
@@ -2790,11 +2956,23 @@ bool WebGLPipeline::ensureOffscreenTarget()
 	glBindRenderbuffer(GL_RENDERBUFFER, m_offDepthRB);
 	glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, m_offW, m_offH);
 	glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, m_offDepthRB);
+	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE && !m_offColorOwned) {
+		// The host texture is not usable as a colour attachment: retry with our own.
+		WARN_ONCE(s_hostGameIncomplete0, "host GAME target %u is not framebuffer-complete; backend texture used", (unsigned)m_offColorTex);
+		m_hostBadName[D3D8GLES_XRT_GAME] = m_offColorTex;
+		m_offColorTex = gxCreateColorTexture(m_offW, m_offH);
+		m_offColorOwned = true;
+		m_lastBoundTex[0] = m_lastBoundTex[1] = ~0u;
+		glBindFramebuffer(GL_FRAMEBUFFER, m_offFBO);
+		glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_offColorTex, 0);
+	}
 	if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
 		WARN_ONCE(s_offscreenIncomplete, "offscreen capture FBO incomplete (%dx%d), capture skipped",
 			m_offW, m_offH);
 		glDeleteFramebuffers(1, &m_offFBO); m_offFBO = 0;
-		glDeleteTextures(1, &m_offColorTex); m_offColorTex = 0;
+		if (m_offColorOwned) glDeleteTextures(1, &m_offColorTex);
+		m_offColorTex = 0;
+		m_offColorOwned = true;
 		glDeleteRenderbuffers(1, &m_offDepthRB); m_offDepthRB = 0;
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 		return false;
@@ -2804,6 +2982,43 @@ bool WebGLPipeline::ensureOffscreenTarget()
 
 // GeneralsX @feature Codex 13/09/2026 GPU-only layer capture. The UI is
 // submitted ONCE into the ordinary composed image and attachment 1 together.
+// Validates the host's stereo slots and describes them. Invalid/unsupported combinations
+// (mismatched sizes, a rect outside the atlas, a name that already failed completeness) return
+// false, and the backend then allocates its own eye targets exactly as on Android.
+bool WebGLPipeline::hostStereoTargets(HostStereo *out)
+{
+	*out=HostStereo{};
+	if(!m_haveHostTargets) return false;
+	const D3D8GLES_XRHostTarget &L=m_hostTargets.slot[D3D8GLES_XRT_STEREO_LEFT];
+	const D3D8GLES_XRHostTarget &R=m_hostTargets.slot[D3D8GLES_XRT_STEREO_RIGHT];
+	auto reject=[&](int slot,const char *why) {
+		if(!m_hostTargetWarned[slot]) {m_hostTargetWarned[slot]=true;fprintf(stderr,"[d3d8gles] host stereo targets rejected: %s; backend targets used\n",why);}
+		return false;
+	};
+	const int kMaxSide=16384; // sanity only; the allocation path checks GL_MAX_TEXTURE_SIZE
+	if(m_hostTargets.atlas) {
+		if(L.glTexture==0 || L.glTexture==m_hostBadName[D3D8GLES_XRT_STEREO_LEFT]) return false;
+		if(L.width<=0 || L.height<=0 || L.width>kMaxSide || L.height>kMaxSide) return reject(D3D8GLES_XRT_STEREO_LEFT,"atlas texture size invalid");
+		const int (*r)[4]=m_hostTargets.eyeRect;
+		for(int e=0;e<2;++e) {
+			if(r[e][2]<64 || r[e][3]<64 || r[e][0]<0 || r[e][1]<0 || r[e][0]+r[e][2]>L.width || r[e][1]+r[e][3]>L.height)
+				return reject(D3D8GLES_XRT_STEREO_LEFT,"eyeRect outside the atlas texture (or smaller than 64)");
+		}
+		if(r[0][2]!=r[1][2] || r[0][3]!=r[1][3]) return reject(D3D8GLES_XRT_STEREO_LEFT,"the two eyeRects differ in size");
+		out->atlas=true;out->eyeW=r[0][2];out->eyeH=r[0][3];out->texW=L.width;out->texH=L.height;
+		out->tex[0]=L.glTexture;out->tex[1]=0;
+		for(int e=0;e<2;++e) for(int i=0;i<4;++i) out->rect[e][i]=r[e][i];
+		out->valid=true;return true;
+	}
+	if(L.glTexture==0 || R.glTexture==0) return false; // partial: use backend targets
+	if(L.glTexture==m_hostBadName[D3D8GLES_XRT_STEREO_LEFT] || R.glTexture==m_hostBadName[D3D8GLES_XRT_STEREO_RIGHT]) return false;
+	if(L.width!=R.width || L.height!=R.height) return reject(D3D8GLES_XRT_STEREO_LEFT,"left/right eye textures differ in size");
+	if(L.width<64 || L.height<64 || L.width>kMaxSide || L.height>kMaxSide) return reject(D3D8GLES_XRT_STEREO_LEFT,"eye texture size invalid (64..16384)");
+	out->atlas=false;out->eyeW=out->texW=L.width;out->eyeH=out->texH=L.height;
+	out->tex[0]=L.glTexture;out->tex[1]=R.glTexture;
+	for(int e=0;e<2;++e) {out->rect[e][0]=0;out->rect[e][1]=0;out->rect[e][2]=L.width;out->rect[e][3]=L.height;}
+	out->valid=true;return true;
+}
 void WebGLPipeline::destroyXRStereo()
 {
 	if(m_xrDecorProgram) glDeleteProgram(m_xrDecorProgram);
@@ -2814,8 +3029,13 @@ void WebGLPipeline::destroyXRStereo()
 	if(m_xrMultiviewDepth)glDeleteTextures(1,&m_xrMultiviewDepth);
 	m_xrMultiviewFBO=m_xrMultiviewDepth=0;
 	m_xrStereoMultiview=m_xrMultiviewRequested=false;
-	glDeleteFramebuffers(2,m_xrStereoFBO);glDeleteTextures(2,m_xrStereoTex);glDeleteRenderbuffers(2,m_xrStereoDepth);
+	glDeleteFramebuffers(2,m_xrStereoFBO);
+	// GeneralsX @feature visionOS port: host-supplied eye textures are never ours to delete.
+	if(!m_xrStereoHost) glDeleteTextures(2,m_xrStereoTex);
+	glDeleteRenderbuffers(2,m_xrStereoDepth);
 	for(int i=0;i<2;++i) m_xrStereoFBO[i]=m_xrStereoTex[i]=m_xrStereoDepth[i]=0;
+	m_xrStereoHost=false;m_xrStereoTexW=m_xrStereoTexH=0;m_xrBoundEyeFBO=0;
+	for(int e=0;e<2;++e) for(int i=0;i<4;++i) m_xrEyeRect[e][i]=0;
 	m_xrStereoW=m_xrStereoH=0;m_xrStereoActive=m_xrStereoReady=false;
 	m_xrStereoCoverage=false;m_xrStereoProbeWait=0;
 	m_xrStereoAtlas=m_xrAtlasRequested=false;
@@ -2829,7 +3049,38 @@ bool WebGLPipeline::beginXRStereo(int width,int height,const float *left,const f
 		!std::isfinite(aspect) || (aspect<=0 && aspect!=-1.0f) || aspect>2) return false;
 	for(int i=0;i<16;++i) if(!std::isfinite(left[i]) || !std::isfinite(right[i]) || !std::isfinite(board[i]) || !std::isfinite(camera[i])) return false;
 	memcpy(m_xrCamera,camera,sizeof(m_xrCamera));
-	if(width!=m_xrStereoW || height!=m_xrStereoH || atlas!=m_xrAtlasRequested || multiview!=m_xrMultiviewRequested || (m_xrStereoMultiview && m_xrMultiviewFailed)) {
+	// GeneralsX @feature visionOS port: host-supplied eye targets define the per-eye size and the
+	// layout; without them (always on Android) width/height/atlas/multiview keep their meaning.
+	// FORCE_ATLAS / NO_MULTIVIEW only ever change backend-allocated targets.
+	const int requestedW=width,requestedH=height;const bool requestedAtlas=atlas,requestedMultiview=multiview;
+	HostStereo hs;
+	const bool host=m_hostGL && hostStereoTargets(&hs);
+	if(host) {width=hs.eyeW;height=hs.eyeH;}
+	if(!host && m_forceAtlas) atlas=true;
+	if(host) atlas=hs.atlas;
+	if(!m_multiviewAllowed || host) multiview=false;
+	if(width!=m_xrStereoW || height!=m_xrStereoH || atlas!=m_xrAtlasRequested || multiview!=m_xrMultiviewRequested || (m_xrStereoMultiview && m_xrMultiviewFailed)
+		|| host!=m_xrStereoHost || (host && (hs.texW!=m_xrStereoTexW || hs.texH!=m_xrStereoTexH))) {
+		auto allocateHost=[&]() {
+			destroyXRStereo();m_xrStereoW=hs.eyeW;m_xrStereoH=hs.eyeH;m_xrStereoAtlas=hs.atlas;
+			m_xrStereoHost=true;m_xrStereoTexW=hs.texW;m_xrStereoTexH=hs.texH;
+			GLint maxTexture=0,maxBuffer=0;glGetIntegerv(GL_MAX_TEXTURE_SIZE,&maxTexture);glGetIntegerv(GL_MAX_RENDERBUFFER_SIZE,&maxBuffer);
+			if(hs.texW>maxTexture || hs.texH>maxTexture || hs.texW>maxBuffer || hs.texH>maxBuffer) return false;
+			const int targets=hs.atlas ? 1:2;
+			glGenFramebuffers(targets,m_xrStereoFBO);glGenRenderbuffers(targets,m_xrStereoDepth);
+			bool complete=true;
+			for(int eye=0;eye<targets;++eye) {
+				m_xrStereoTex[eye]=hs.tex[eye];
+				glBindRenderbuffer(GL_RENDERBUFFER,m_xrStereoDepth[eye]);glRenderbufferStorage(GL_RENDERBUFFER,GL_DEPTH24_STENCIL8,hs.texW,hs.texH);
+				glBindFramebuffer(GL_FRAMEBUFFER,m_xrStereoFBO[eye]);
+				glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,hs.tex[eye],0);
+				glFramebufferRenderbuffer(GL_FRAMEBUFFER,GL_DEPTH_STENCIL_ATTACHMENT,GL_RENDERBUFFER,m_xrStereoDepth[eye]);
+				const bool eyeComplete=glCheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE;
+				if(!eyeComplete) m_hostBadName[eye]=hs.tex[eye]; // never retry this name; fall back to backend targets
+				complete=complete && eyeComplete;
+			}
+			return complete;
+		};
 		auto allocate=[&](bool combined) {
 		destroyXRStereo();m_xrStereoW=width;m_xrStereoH=height;m_xrStereoAtlas=combined;
 		const int targets=combined ? 1:2,targetWidth=combined ? width*2:width;
@@ -2851,7 +3102,16 @@ bool WebGLPipeline::beginXRStereo(int width,int height,const float *left,const f
 		return ok;
 		};
 		bool ok=false;
-		if(multiview && !m_xrMultiviewFailed && m_xrMultiview.available()) {
+		if(host) {
+			ok=allocateHost();
+			if(!ok) {
+				fprintf(stderr,"[d3d8gles] host stereo targets are not framebuffer-complete; backend-allocated targets used\n");
+				destroyXRStereo();invalidateCachedGLState();
+				// Retry immediately with backend targets so this frame still renders.
+				return beginXRStereo(requestedW,requestedH,left,right,board,aspect,camera,requestedAtlas,requestedMultiview);
+			}
+		}
+		else if(multiview && !m_xrMultiviewFailed && m_xrMultiview.available()) {
 			destroyXRStereo();m_xrStereoW=width;m_xrStereoH=height;
 			GLint maxTexture=0;glGetIntegerv(GL_MAX_TEXTURE_SIZE,&maxTexture);
 			if(width<=maxTexture && height<=maxTexture) {
@@ -2884,7 +3144,22 @@ bool WebGLPipeline::beginXRStereo(int width,int height,const float *left,const f
 		if(!ok) {ok=allocate(atlas);if(!ok && atlas)ok=allocate(false);}
 		if(!ok) {destroyXRStereo();invalidateCachedGLState();return false;}
 		m_xrAtlasRequested=atlas;m_xrMultiviewRequested=multiview;
-		fprintf(stderr,"[d3d8gles] P15 geometry targets %dx%d per eye, %s; unchanged total pixels\n",width,height,m_xrStereoMultiview ? "multiview":m_xrStereoAtlas ? "atlas":"separate");
+		fprintf(stderr,"[d3d8gles] P15 geometry targets %dx%d per eye, %s%s; unchanged total pixels\n",width,height,m_xrStereoMultiview ? "multiview":m_xrStereoAtlas ? "atlas":"separate",host ? " (host textures)":"");
+	} else if(host) {
+		// Same layout as last frame: the host only rotated its ring slot. Re-point the colour
+		// attachments (cheap; no reallocation, depth stays).
+		const int targets=hs.atlas ? 1:2;
+		for(int eye=0;eye<targets;++eye) if(m_xrStereoTex[eye]!=hs.tex[eye]) {
+			glBindFramebuffer(GL_FRAMEBUFFER,m_xrStereoFBO[eye]);
+			glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,hs.tex[eye],0);
+			m_xrStereoTex[eye]=hs.tex[eye];
+		}
+	}
+	// Per-eye viewport rectangles (texel coordinates of the eye target). For backend-allocated
+	// targets this is exactly the old hard-wired {eye*W,0,W,H} / {0,0,W,H}.
+	for(int eye=0;eye<2;++eye) {
+		if(host) for(int i=0;i<4;++i) m_xrEyeRect[eye][i]=hs.rect[eye][i];
+		else {m_xrEyeRect[eye][0]=m_xrStereoAtlas ? eye*m_xrStereoW:0;m_xrEyeRect[eye][1]=0;m_xrEyeRect[eye][2]=m_xrStereoW;m_xrEyeRect[eye][3]=m_xrStereoH;}
 	}
 	glDisable(GL_SCISSOR_TEST);glColorMask(GL_TRUE,GL_TRUE,GL_TRUE,GL_TRUE);glDepthMask(GL_TRUE);glClearDepthf(1);
 	glClearColor(0,0,0,0);
@@ -2898,6 +3173,9 @@ void WebGLPipeline::endXRStereo()
 {
 	if(!m_xrStereoActive) return;
 	m_xrStereoActive=false;
+	// GeneralsX @feature visionOS port (P6): rebind the ordinary FBO once here instead of after
+	// every stereo draw. No-op unless host GL left an eye FBO bound.
+	leaveXRStereoFBO();
 	// GeneralsX @bugfix Codex 13/09/2026 Submitted draws can all be invisible.
 	// Validate actual alpha in BOTH eyes once per activation/allocation before
 	// hiding the planar board. Failed probes retry every 120 frames; successful
@@ -2910,9 +3188,27 @@ void WebGLPipeline::endXRStereo()
 		GLint packValues[4];for(int i=0;i<4;++i) {glGetIntegerv(packNames[i],&packValues[i]);glPixelStorei(packNames[i],i==0 ? 4:0);}
 		std::vector<unsigned char> pixels(size_t(m_xrStereoW)*m_xrStereoH*4);
 		bool covered=true;
+		// GeneralsX @feature visionOS port: never glReadPixels a host-wrapped texture (ANGLE
+		// would getBytes: a Private MTLTexture and take the Metal host down). Blit the eye into a
+		// backend-owned scratch texture on the GPU and read that instead; happens once per
+		// activation, exactly like the original probe.
+		GLint drawFBO=0;GLuint probeFBO=0,probeTex=0;
+		if(m_xrStereoHost) {
+			glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING,&drawFBO);
+			probeTex=gxCreateColorTexture(m_xrStereoW,m_xrStereoH);
+			glGenFramebuffers(1,&probeFBO);glBindFramebuffer(GL_DRAW_FRAMEBUFFER,probeFBO);
+			glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,probeTex,0);
+			m_lastBoundTex[0]=m_lastBoundTex[1]=~0u;
+		}
 		for(int eye=0;eye<2;++eye) {
 			glBindFramebuffer(GL_READ_FRAMEBUFFER,m_xrStereoFBO[m_xrStereoAtlas ? 0:eye]);glReadBuffer(GL_COLOR_ATTACHMENT0);
 			std::fill(pixels.begin(),pixels.end(),0);
+			if(m_xrStereoHost) {
+				const int *r=m_xrEyeRect[eye];
+				glBlitFramebuffer(r[0],r[1],r[0]+r[2],r[1]+r[3],0,0,m_xrStereoW,m_xrStereoH,GL_COLOR_BUFFER_BIT,GL_NEAREST);
+				glBindFramebuffer(GL_READ_FRAMEBUFFER,probeFBO);glReadBuffer(GL_COLOR_ATTACHMENT0);
+				glReadPixels(0,0,m_xrStereoW,m_xrStereoH,GL_RGBA,GL_UNSIGNED_BYTE,pixels.data());
+			} else
 			glReadPixels(m_xrStereoAtlas ? eye*m_xrStereoW:0,0,m_xrStereoW,m_xrStereoH,GL_RGBA,GL_UNSIGNED_BYTE,pixels.data());
 			const GLenum error=glGetError();unsigned alpha=0,rgb=0;
 			for(size_t i=0;i<pixels.size();i+=4) {alpha+=pixels[i+3]>0;rgb+=(pixels[i]|pixels[i+1]|pixels[i+2])!=0;}
@@ -2922,6 +3218,10 @@ void WebGLPipeline::endXRStereo()
 		}
 		glBindFramebuffer(GL_READ_FRAMEBUFFER,readFBO);glBindBuffer(GL_PIXEL_PACK_BUFFER,packBuffer);
 		for(int i=0;i<4;++i) glPixelStorei(packNames[i],packValues[i]);
+		if(m_xrStereoHost) {
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER,(GLuint)drawFBO);
+			glDeleteFramebuffers(1,&probeFBO);glDeleteTextures(1,&probeTex);
+		}
 		m_xrStereoCoverage=covered;m_xrStereoProbeWait=120;
 	} else if(m_xrStereoProbeWait) --m_xrStereoProbeWait;
 	m_xrStereoReady=m_xrStereoDraws>0 && m_xrStereoCoverage;
@@ -2933,9 +3233,11 @@ void WebGLPipeline::destroyXRLayers()
 {
 	destroyXRStereo();
 	if(m_xrWorldFBO) glDeleteFramebuffers(1,&m_xrWorldFBO);
-	if(m_xrWorldTex) glDeleteTextures(1,&m_xrWorldTex);
-	if(m_xrUITex) glDeleteTextures(1,&m_xrUITex);
+	// GeneralsX @feature visionOS port: only textures the backend created are deleted.
+	if(m_xrWorldTex && m_xrWorldOwned) glDeleteTextures(1,&m_xrWorldTex);
+	if(m_xrUITex && m_xrUIOwned) glDeleteTextures(1,&m_xrUITex);
 	m_xrWorldFBO=m_xrWorldTex=m_xrUITex=0; m_xrSplitReady=m_xrUI=false;
+	m_xrWorldOwned=m_xrUIOwned=true;
 	m_xrWorldSnapshotValid=false;
 }
 
@@ -2966,8 +3268,8 @@ void WebGLPipeline::drawXRDecorations(const float *vertices,int count) {
 	if(m_xrStereoAtlas) {glBindFramebuffer(GL_FRAMEBUFFER,m_xrStereoFBO[0]);glEnable(GL_SCISSOR_TEST);}
 	for(int eye=0;eye<2;++eye) {
 		if(!m_xrStereoAtlas)glBindFramebuffer(GL_FRAMEBUFFER,m_xrStereoFBO[eye]);
-		const int eyeX=m_xrStereoAtlas ? eye*m_xrStereoW:0;glViewport(eyeX,0,m_xrStereoW,m_xrStereoH);
-		if(m_xrStereoAtlas)glScissor(eyeX,0,m_xrStereoW,m_xrStereoH);
+		const int *r=m_xrEyeRect[eye];glViewport(r[0],r[1],r[2],r[3]);
+		if(m_xrStereoAtlas)glScissor(r[0],r[1],r[2],r[3]);
 		glUniformMatrix4fv(eyeUniform,1,GL_FALSE,m_xrEyeClip[eye]);glDrawArrays(GL_TRIANGLES,0,count);
 	}
 	if(m_xrStereoAtlas)glDisable(GL_SCISSOR_TEST);
@@ -2985,17 +3287,60 @@ void WebGLPipeline::beginXRFrame(bool split,bool elideOrdinaryWorld)
 	// another Present replaces it; never alternate layouts on skipped renders.
 	if(!split) m_xrSplitReady=false;
 	if(m_offFBO) {
+		// GeneralsX @feature visionOS port: pick up this frame's GAME ring slot (also binds m_offFBO).
+		if(m_hostGL) syncHostGameTarget();
 		glBindFramebuffer(GL_FRAMEBUFFER,m_offFBO);
 		const GLenum one=GL_COLOR_ATTACHMENT0; glDrawBuffers(1,&one);
 	}
 	invalidateCachedGLState();
 }
+// Re-points the world layer (m_xrWorldFBO colour 0) and UI layer (m_offFBO colour attachment 1)
+// at the host's current WORLD/UI slot names, or back at backend textures when a slot is no
+// longer supplied. Called once per frame from beginXRUI once the layers exist. Leaves m_offFBO
+// bound. Returns false when a host texture was rejected (the caller keeps going: the slot
+// already fell back to a backend texture).
+bool WebGLPipeline::syncHostLayerTargets()
+{
+	bool ok=true;
+	auto retarget=[&](int slot,GLuint &name,bool &owned,GLuint fbo,GLenum attachment) {
+		const GLuint want=hostTargetFor(slot,m_offW,m_offH);
+		if(want!=0 && want!=name) {
+			glBindFramebuffer(GL_FRAMEBUFFER,fbo);
+			glFramebufferTexture2D(GL_FRAMEBUFFER,attachment,GL_TEXTURE_2D,want,0);
+			if(glCheckFramebufferStatus(GL_FRAMEBUFFER)!=GL_FRAMEBUFFER_COMPLETE) {
+				fprintf(stderr,"[d3d8gles] host target slot %d (%u) is not framebuffer-complete; backend texture used\n",slot,(unsigned)want);
+				m_hostBadName[slot]=want;ok=false;
+				glFramebufferTexture2D(GL_FRAMEBUFFER,attachment,GL_TEXTURE_2D,name,0); // keep what worked
+				return;
+			}
+			if(owned && name) glDeleteTextures(1,&name);
+			name=want;owned=false;
+		} else if(want==0 && !owned) {
+			const GLuint own=gxCreateColorTexture(m_offW,m_offH);
+			glBindFramebuffer(GL_FRAMEBUFFER,fbo);
+			glFramebufferTexture2D(GL_FRAMEBUFFER,attachment,GL_TEXTURE_2D,own,0);
+			name=own;owned=true;m_lastBoundTex[0]=m_lastBoundTex[1]=~0u;
+		}
+	};
+	retarget(D3D8GLES_XRT_WORLD,m_xrWorldTex,m_xrWorldOwned,m_xrWorldFBO,GL_COLOR_ATTACHMENT0);
+	retarget(D3D8GLES_XRT_UI,m_xrUITex,m_xrUIOwned,m_offFBO,GL_COLOR_ATTACHMENT1);
+	glBindFramebuffer(GL_FRAMEBUFFER,m_offFBO);
+	return ok;
+}
+
 bool WebGLPipeline::beginXRUI(bool elideWorldCopy)
 {
 	if(!m_xrMode || !m_ctxReady || !m_xrSplitRequested || m_xrUI || m_curFBO!=0) return false;
+	leaveXRStereoFBO();
 	if(!ensureOffscreenTarget()) return false;
+	if(m_xrWorldFBO && m_hostGL) syncHostLayerTargets();
 	if(!m_xrWorldFBO) {
-		auto texture=[&](GLuint &name) {
+		// GeneralsX @feature visionOS port: a slot the host supplied at the right size is used
+		// as-is (never deleted by us); everything else is allocated exactly as before.
+		auto texture=[&](GLuint &name,int slot,bool &owned) {
+			const GLuint host=hostTargetFor(slot,m_offW,m_offH);
+			if(host) {name=host;owned=false;return;}
+			owned=true;
 			glGenTextures(1,&name); glBindTexture(GL_TEXTURE_2D,name);
 			glTexImage2D(GL_TEXTURE_2D,0,GL_RGBA8,m_offW,m_offH,0,GL_RGBA,GL_UNSIGNED_BYTE,nullptr);
 			glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_MIN_FILTER,GL_LINEAR);
@@ -3003,7 +3348,7 @@ bool WebGLPipeline::beginXRUI(bool elideWorldCopy)
 			glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_CLAMP_TO_EDGE);
 			glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_CLAMP_TO_EDGE);
 		};
-		texture(m_xrWorldTex); texture(m_xrUITex);
+		texture(m_xrWorldTex,D3D8GLES_XRT_WORLD,m_xrWorldOwned); texture(m_xrUITex,D3D8GLES_XRT_UI,m_xrUIOwned);
 		glGenFramebuffers(1,&m_xrWorldFBO); glBindFramebuffer(GL_FRAMEBUFFER,m_xrWorldFBO);
 		glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_TEXTURE_2D,m_xrWorldTex,0);
 		bool ok=glCheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE;
@@ -3012,8 +3357,17 @@ bool WebGLPipeline::beginXRUI(bool elideWorldCopy)
 		ok=ok && glCheckFramebufferStatus(GL_FRAMEBUFFER)==GL_FRAMEBUFFER_COMPLETE;
 		if(!ok) {
 			glFramebufferTexture2D(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT1,GL_TEXTURE_2D,0,0);
+			// GeneralsX @feature visionOS port: a rejected host texture must not disable the split
+			// path for good -- remember the offending names and retry with backend textures.
+			const bool hostInvolved=!m_xrWorldOwned || !m_xrUIOwned;
+			if(hostInvolved) {
+				if(!m_xrWorldOwned) m_hostBadName[D3D8GLES_XRT_WORLD]=m_xrWorldTex;
+				if(!m_xrUIOwned) m_hostBadName[D3D8GLES_XRT_UI]=m_xrUITex;
+			}
 			destroyXRLayers(); invalidateCachedGLState();
-			WARN_ONCE(s_xrLayerFailure,"P5 layer allocation failed; composed fallback retained"); return false;
+			WARN_ONCE(s_xrLayerFailure,"P5 layer allocation failed; composed fallback retained");
+			if(hostInvolved) return beginXRUI(elideWorldCopy);
+			return false;
 		}
 		fprintf(stderr,"[d3d8gles] P5 MRT layers allocated %dx%d; full composed fallback retained\n",m_offW,m_offH);
 	}
@@ -3041,6 +3395,7 @@ bool WebGLPipeline::beginXRUI(bool elideWorldCopy)
 void WebGLPipeline::setRenderTarget(WebGLDevice * /*dev*/, WebGLTexture *tex)
 {
 	if (!m_ctxReady) return;
+	leaveXRStereoFBO(); // host GL: drop the lazily-left eye FBO before any rebind below
 
 	if (tex == nullptr) {
 		// GeneralsX @feature XR port Phase 1.0 - external-context mode has
@@ -3156,6 +3511,7 @@ void WebGLPipeline::setRenderTarget(WebGLDevice * /*dev*/, WebGLTexture *tex)
 void WebGLPipeline::readbackRenderTarget(WebGLTexture *tex)
 {
 	if (!m_ctxReady || tex == nullptr || tex->m_gl.fbo == 0 || tex->m_levels.empty()) return;
+	leaveXRStereoFBO();
 
 	WebGLSurface *s = tex->m_levels[0];
 	const int w = (int)s->m_width;
@@ -3177,7 +3533,11 @@ void WebGLPipeline::readbackRenderTarget(WebGLTexture *tex)
 	glBindFramebuffer(GL_FRAMEBUFFER, tex->m_gl.fbo);
 	glPixelStorei(GL_PACK_ALIGNMENT, 1);
 	glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, m_rtReadback.data());
-	glBindFramebuffer(GL_FRAMEBUFFER, m_curFBO);
+	// GeneralsX @bugfix visionOS port: m_curFBO==0 is the engine's logical backbuffer, which in
+	// XR mode lives in m_offFBO. Restoring 0 would leave the (non-existent, on a surfaceless
+	// ANGLE context) default framebuffer bound for every following draw. Quest keeps its
+	// original restore.
+	glBindFramebuffer(GL_FRAMEBUFFER, m_hostGL ? logicalFBO() : m_curFBO);
 
 	// Row 0 of this FBO's texture attachment is D3D's top row (setRenderTarget
 	// keeps m_yFlip at +1 precisely so it lands there), and glReadPixels
@@ -3216,7 +3576,8 @@ void WebGLPipeline::debugSampleRenderTarget(WebGLTexture *tex, const char *tag)
 	const int by = (h - bh) / 2;
 
 	std::vector<uint8_t> px((size_t)bw * bh * 4);
-	const GLuint prevFBO = m_curFBO;
+	leaveXRStereoFBO();
+	const GLuint prevFBO = m_hostGL ? logicalFBO() : m_curFBO;
 	glBindFramebuffer(GL_FRAMEBUFFER, tex->m_gl.fbo);
 	glPixelStorei(GL_PACK_ALIGNMENT, 1);
 	glReadPixels(bx, by, bw, bh, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
@@ -3252,7 +3613,20 @@ void WebGLPipeline::captureOffscreenPPM()
 	// alpha on the CPU instead.
 	std::vector<uint8_t> px((size_t)m_offW * m_offH * 4);
 	glReadPixels(0, 0, m_offW, m_offH, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+#if defined(__ANDROID__)
 	const char *path = "/sdcard/Download/GeneralsZH/gx_offscreen.ppm";
+#else
+	// GeneralsX @feature visionOS port: no /sdcard; write next to the process' temp dir
+	// (overridable), only reachable with GX_XR_CAPTURE_PPM on a non-host-GL build.
+	static char s_ppmPath[512];
+	{
+		const char *dir = getenv("GX_XR_CAPTURE_DIR");
+		if (!dir || !*dir) dir = getenv("TMPDIR");
+		if (!dir || !*dir) dir = "/tmp";
+		snprintf(s_ppmPath, sizeof(s_ppmPath), "%s/gx_offscreen.ppm", dir);
+	}
+	const char *path = s_ppmPath;
+#endif
 	FILE *f = fopen(path, "wb");
 	if (f) {
 		fprintf(f, "P6\n%d %d\n255\n", m_offW, m_offH);
@@ -3289,15 +3663,19 @@ void WebGLPipeline::present()
 {
 	if (!m_ctxReady) return;
 	m_frame++;
+	leaveXRStereoFBO(); // host GL: nothing may stay pointed at an eye target across a Present
 
 	// GeneralsX @spike XR port Phase 0.2 - marker-gated so the capture can
 	// be toggled mid-session from adb without a rebuild. XR mode (1.0) owns
 	// its FBO permanently and never polls the marker.
+#if defined(__ANDROID__)
+	// GeneralsX @feature visionOS port: adb marker-file toggle, Android only.
 	if (!m_xrMode && (m_frame % 60) == 0) {
 		FILE *mk = fopen("/sdcard/Download/GeneralsZH/gx_xr_offscreen.txt", "rb");
 		if (mk) fclose(mk);
 		setOffscreenCapture(mk != nullptr);
 	}
+#endif
 
 	GLenum err = glGetError();
 	if(m_xrMode && err!=GL_NO_ERROR && m_xrElision.pendingMissing) {

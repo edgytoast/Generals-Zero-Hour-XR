@@ -41,6 +41,8 @@
 //#define ENABLE_STRIPING
 
 #include "dx8renderer.h"
+// GeneralsX @feature visionOS port: GX_XR_HOST / GX_USES_D3D8GLES replace the bare __ANDROID__ tests below.
+#include "gx_backend.h"
 #include "dx8wrapper.h"
 #include "dx8polygonrenderer.h"
 #include "dx8vertexbuffer.h"
@@ -60,7 +62,7 @@
 #include "camera.h"
 #include "stripoptimizer.h"
 #include "meshgeometry.h"
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 // GeneralsX @perf Android port 09/05/2026 - d3d8gles_SetDrawCategory()
 #include "d3d8gles.h"
 #endif
@@ -1292,7 +1294,7 @@ void DX8SkinFVFCategoryContainer::Log(bool only_visible)
 
 void DX8SkinFVFCategoryContainer::Render()
 {
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 	const int gxPrevCat = d3d8gles_SetDrawCategory(D3D8GLES_DRAWCAT_SKIN);
 	struct GxCatRestore { int prev; ~GxCatRestore() { d3d8gles_SetDrawCategory(prev); } } gxCatRestore{gxPrevCat};
 #endif
@@ -1688,7 +1690,7 @@ unsigned DX8TextureCategoryClass::Add_Mesh(
 
 void DX8TextureCategoryClass::Render()
 {
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 	const int gxPrevCat = d3d8gles_SetDrawCategory(D3D8GLES_DRAWCAT_MODELS);
 	struct GxCatRestore { int prev; ~GxCatRestore() { d3d8gles_SetDrawCategory(prev); } } gxCatRestore{gxPrevCat};
 #endif
