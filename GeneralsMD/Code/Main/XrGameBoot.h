@@ -9,11 +9,26 @@
 //
 // Single-threaded by design: init, frames, and shutdown all run on the XR
 // thread, the only thread that ever touches this GL context.
+//
+// GeneralsX @feature visionOS port: the host-neutral surface (everything except
+// the Android JNI entry) is compiled wherever an XR host owns the frame loop
+// (GX_XR_HOST = Android or visionOS, see gx_backend.h). Android keeps
+// XrGameBoot_Init(JNIEnv*, ...); visionOS boots through XrGameBoot_InitHost().
 #pragma once
 
-#ifdef __ANDROID__
+#include "gx_backend.h" // GX_XR_HOST
 
+#if defined(GX_XR_HOST)
+
+// Tells package E's forwarding bridge (visionos/VisionEngineBridgeXr.cpp) that the
+// XrGameBoot_* API below is declared and defined on this platform.
+#ifndef GX_XRGAMEBOOT_HOST
+#define GX_XRGAMEBOOT_HOST 1
+#endif
+
+#ifdef __ANDROID__
 #include <jni.h>
+#endif
 #include "XrEndgame.h"
 #include "XrLayers.h"
 #include "XrWorld.h"
@@ -65,11 +80,61 @@ void XrGameBoot_DebugEndgame(XrDebugEndgame action);
 constexpr int kXrGameWidth = 1280;
 constexpr int kXrGameHeight = 720;
 
+#ifdef __ANDROID__
 // Full boot: storage env, working directory, SDL events, GL XR config,
 // engine init. eglDisplay/eglContext are informational (the context must
 // already be current on this thread). Returns false on failure -- the
 // caller then falls back to the triangle loop and the log says why.
 bool XrGameBoot_Init(JNIEnv *env, jobject activity, void *eglDisplay, void *eglContext);
+#else
+// GeneralsX @feature visionOS port: everything the Android front half of
+// XrGameBoot_Init discovers through JNI and marker files arrives in this struct
+// instead (docs/visionos-engine-host.md). Strings are copied; the pointers only
+// have to stay valid during the call. Zero-initialise, then fill.
+enum XrGameBootPolicy {
+	XRBOOT_POLICY_SEED_OPTIONS     = 1u << 0, // copy DefaultOptions.ini to <userDataRoot>/Options.ini on first run
+	XRBOOT_POLICY_LOGIC_TIME_SCALE = 1u << 1, // simulation runs at logicHz whatever the host frame rate (docs risk R1)
+	XRBOOT_POLICY_RENDER_CAP       = 1u << 2, // the engine thread limits itself to renderFpsCap frames per second
+	XRBOOT_POLICY_GUARD_TIME_KEYS  = 1u << 3, // keep the in-game speed keys inside the policy envelope
+	XRBOOT_POLICY_DEFAULT = XRBOOT_POLICY_SEED_OPTIONS | XRBOOT_POLICY_LOGIC_TIME_SCALE |
+		XRBOOT_POLICY_RENDER_CAP | XRBOOT_POLICY_GUARD_TIME_KEYS
+};
+struct XrGameBootHostConfig {
+	const char *zhRoot = nullptr;          // Zero Hour tree: working directory, CNC_GENERALS_ZH_PATH (required)
+	const char *baseRoot = nullptr;        // base Generals tree, CNC_GENERALS_PATH (optional)
+	const char *userDataRoot = nullptr;    // GENERALSX_USERDATA_DIR: saves, Options.ini, maps (required)
+	const char *appSupportRoot = nullptr;  // xr-layout-v2.cfg, xr-camera-v1.cfg, game_language.cfg, HOME (required)
+	const char *logPath = nullptr;         // stderr sink (previous log kept as *-prev.log); null = leave stderr alone
+	bool logTee = true;                    // keep the original stderr as well (console / Xcode)
+	int renderWidth = 0, renderHeight = 0; // engine backbuffer (-xres/-yres); 0 = kXrGameWidth/Height
+	const char *textLanguage = nullptr;    // GENERALSX_TEXT_LANGUAGE override ("english"); null = game_language.cfg / default
+	void *eglDisplay = nullptr;            // informational; the context must be current on the calling thread
+	void *eglContext = nullptr;
+	void *(*getProcAddress)(const char *) = nullptr; // eglGetProcAddress (D3D8GLES_XRConfig::getProcAddress)
+	unsigned glFlags = 0;                  // D3D8GLES_XRFLAG_*
+	unsigned policy = XRBOOT_POLICY_DEFAULT; // XrGameBootPolicy
+	int logicHz = 30;                      // simulation rate with XRBOOT_POLICY_LOGIC_TIME_SCALE
+	int renderFpsCap = 45;                 // engine frames per second with XRBOOT_POLICY_RENDER_CAP (0 = uncapped)
+};
+// visionOS boot: same sequence as the Android XrGameBoot_Init after its storage discovery
+// (environment, working directory, Options seeding, SDL events, critsecs, memory manager, Version,
+// command line, GX_XR_OffscreenBoot, d3d8gles XR config, FramePacer, engine init). Runs on the
+// engine thread with the ANGLE context current. Returns false on failure; XrGameBoot_LastError()
+// then holds the reason (the log has the details).
+bool XrGameBoot_InitHost(const XrGameBootHostConfig &config);
+// Redirects stderr into `path` (previous log kept) and, with `tee`, keeps forwarding to the original stderr.
+// Idempotent; XrGameBoot_InitHost calls it for config.logPath, a host may call it earlier.
+void XrGameBoot_InstallLogSink(const char *path, bool tee);
+const char *XrGameBoot_LastError();
+// Pause bookkeeping for the host lifecycle (engine thread only). paused=true silences audio, releases
+// the mouse and cancels edge scrolling exactly like SDL3GameEngine does on DID_ENTER_BACKGROUND;
+// paused=false undoes only what the pause did.
+void XrGameBoot_SetHostPaused(bool paused);
+// Effective simulation rate self-check (engine thread): logic frames per wall-clock second since the
+// last call, logged by the host every 10 s. Returns false until a window of at least `minSeconds` elapsed.
+struct XrLogicRate { double logicHz = 0, engineFps = 0, seconds = 0; unsigned logicFrames = 0, engineFrames = 0; bool inGame = false; };
+bool XrGameBoot_SampleLogicRate(XrLogicRate &out, double minSeconds);
+#endif // __ANDROID__
 
 // One game frame. Returns FALSE once the game wants to quit (or on an
 // unexpected exception, logged, rather than crashing across the thread).
@@ -134,4 +199,4 @@ int XrGameBoot_GameHeight();
 // the activity (System.exit) so the next launch starts fresh.
 void XrGameBoot_Shutdown();
 
-#endif // __ANDROID__
+#endif // GX_XR_HOST

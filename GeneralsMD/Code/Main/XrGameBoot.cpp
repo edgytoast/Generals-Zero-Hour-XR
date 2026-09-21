@@ -4,14 +4,30 @@
 // Version, command line, engine init) minus everything window-shaped: no
 // SDL video, no window, no resolution probing -- the render size is fixed
 // (kXrGameWidth/Height) and GL comes from the XR loop's context.
-#ifdef __ANDROID__
+//
+// GeneralsX @feature visionOS port: compiled wherever an XR host drives the engine
+// (GX_XR_HOST, see gx_backend.h). Everything Android specific (JNI storage, marker
+// files, /storage/emulated paths, __android_log_print) stays under __ANDROID__ and
+// behaves exactly as before; visionOS enters through XrGameBoot_InitHost(), and both
+// entries share one static tail (xrBootTail).
+#include "gx_backend.h" // GX_XR_HOST
+#if defined(GX_XR_HOST)
 
 #include "XrGameBoot.h"
 #include "XrCameraProfile.h"
 #include "XrTactics.h"
 #include "XrBoardMesh.h"
 
+#ifdef __ANDROID__
 #include <android/log.h>
+#else
+#include <os/log.h>
+#include <signal.h>
+#include <stdarg.h>
+#include <atomic>
+#include <chrono>
+#include <thread>
+#endif
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -85,9 +101,15 @@
 #include "SDL3GameEngine.h"
 #include "GeneratedVersion.h"
 #include "d3d8gles.h"
+#if defined(GX_PLATFORM_VISIONOS)
+#include "Common/AudioAffect.h"
+#include "Common/GameAudio.h"
+#include "GameNetwork/NetworkInterface.h"
+#endif
 
 #define GX_BOOT_TAG "gx-xr-boot"
 
+#ifdef __ANDROID__
 // Logging goes to BOTH logcat and stderr: stderr lands in the XR log file
 // (once redirected below), logcat is visible live via adb during the
 // ~minute-long boot with no other signs of life.
@@ -101,6 +123,32 @@
 	fprintf(stderr, "[xr-boot] ERROR: " __VA_ARGS__); \
 	fprintf(stderr, "\n"); \
 } while (0)
+#else
+// GeneralsX @feature visionOS port: os_log (Console.app / `log stream`) plus stderr, which the
+// host redirects into the engine log file (XrGameBoot_InstallLogSink). GXLOGE also records the
+// message as the reason XrGameBoot_LastError() reports to the launcher.
+static std::string s_lastError;
+static void xrLogApple(bool error, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+static void xrLogApple(bool error, const char *fmt, ...)
+{
+	char text[1024];
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(text, sizeof(text), fmt, ap);
+	va_end(ap);
+	static os_log_t log = os_log_create("com.generalsx.zerohour.xr.vision", GX_BOOT_TAG);
+	if (error) {
+		os_log_error(log, "%{public}s", text);
+		fprintf(stderr, "[xr-boot] ERROR: %s\n", text);
+		s_lastError = text;
+	} else {
+		os_log(log, "%{public}s", text);
+		fprintf(stderr, "[xr-boot] %s\n", text);
+	}
+}
+#define GXLOG(...) xrLogApple(false, __VA_ARGS__)
+#define GXLOGE(...) xrLogApple(true, __VA_ARGS__)
+#endif
 
 // Defined here (declared in SDL3GameEngine.h): the XR boot sets it before
 // CreateGameEngine() so init() skips the SDL window binding. The 2D port
@@ -131,6 +179,7 @@ static std::string s_cameraPath;
 static XrCameraProfile s_cameraFavorite;
 static bool s_hasCameraFavorite=false;
 
+#ifdef __ANDROID__
 // ---------------------------------------------------------------------------
 // Storage paths via JNI (no SDLActivity here, so SDL_GetAndroid*Path is
 // unusable -- ask the activity object directly).
@@ -210,6 +259,7 @@ static bool readMarkerPath(const char *markerFile, char *outPath, size_t outLen)
 	fclose(marker);
 	return ok;
 }
+#endif // __ANDROID__
 
 static void mkdirParents(const char *path)
 {
@@ -217,6 +267,352 @@ static void mkdirParents(const char *path)
 	std::filesystem::create_directories(path, ec);
 }
 
+#if defined(GX_PLATFORM_VISIONOS)
+// ---------------------------------------------------------------------------
+// visionOS host support: log sink, frame-rate / simulation-rate policy, lifecycle pause and the
+// effective-logic-rate self check. All of it runs on the engine thread (the thread that owns the
+// ANGLE context and calls XrGameBoot_Frame), except XrGameBoot_InstallLogSink.
+// ---------------------------------------------------------------------------
+
+// stderr -> <logPath> (previous log kept as <logPath minus .log>-prev.log). With `tee` the original
+// stderr keeps receiving everything too (simctl --console-pty, Xcode), through a pipe and a small
+// forwarding thread; without it stderr is simply re-opened on the file, like the Android XR log.
+static std::atomic<bool> s_logSinkInstalled{false};
+void XrGameBoot_InstallLogSink(const char *path, bool tee)
+{
+	if (path == nullptr || path[0] == '\0' || s_logSinkInstalled.exchange(true)) {
+		return;
+	}
+	std::string prev(path);
+	const size_t dot = prev.rfind('.');
+	prev = (dot == std::string::npos) ? prev + "-prev" : prev.substr(0, dot) + "-prev" + prev.substr(dot);
+	rename(path, prev.c_str());
+	signal(SIGPIPE, SIG_IGN); // a closed console must never kill the engine
+	if (!tee) {
+		if (freopen(path, "w", stderr) != nullptr) {
+			setvbuf(stderr, nullptr, _IOLBF, 0);
+		}
+		return;
+	}
+	FILE *file = fopen(path, "w");
+	int fds[2] = {-1, -1};
+	if (file == nullptr || pipe(fds) != 0) {
+		if (file != nullptr) fclose(file);
+		s_logSinkInstalled = false;
+		fprintf(stderr, "[xr-boot] ERROR: cannot open the engine log %s: %s\n", path, strerror(errno));
+		return;
+	}
+	const int console = dup(STDERR_FILENO);
+	dup2(fds[1], STDERR_FILENO);
+	close(fds[1]);
+	setvbuf(stderr, nullptr, _IONBF, 0);
+	const int readFd = fds[0];
+	std::thread([file, readFd, console]() {
+		char buffer[4096];
+		ssize_t n;
+		while ((n = read(readFd, buffer, sizeof(buffer))) > 0 || (n < 0 && errno == EINTR)) {
+			if (n <= 0) continue;
+			fwrite(buffer, 1, (size_t)n, file);
+			fflush(file);
+			if (console >= 0) {
+				const ssize_t ignored = write(console, buffer, (size_t)n);
+				(void)ignored;
+			}
+		}
+	}).detach();
+	fprintf(stderr, "[xr-boot] stderr -> %s (tee)\n", path);
+}
+
+const char *XrGameBoot_LastError() { return s_lastError.c_str(); }
+
+// ---- frame-rate / simulation-rate policy (docs/VISIONOS_PORT_ARCHITECTURE.md R1) ----------------
+//
+// Problem: the engine advances one 30 Hz logic step per rendered frame unless a logic time scale is
+// active, and nothing enables one for a host without the desktop frame limiter. At a 60-90 Hz
+// compositor that is a 2-3x game speed. The engine thread therefore applies, after `new FramePacer()`:
+//   enableLogicTimeScale(TRUE) + setLogicTimeScaleFps(30)   simulation at 30 Hz whatever the render rate
+//   enableFramesPerSecondLimit(TRUE) + setFramesPerSecondLimit(cap)   render at most `cap` frames/s
+// canUpdateRegularGameLogic() then runs the accumulator branch (30 < cap): one logic step per 1/30 s of
+// real time, skipped on the frames in between, which still redraw. The limiter sleeps inside
+// executeSingleFrame -- on the ENGINE thread, so it never stalls the compositor.
+//
+// The in-game speed keys (CommandXlat.cpp changeLogicTimeScale / changeMaxRenderFps) compare against
+// getFramesPerSecondLimit() and switch the logic scale OFF once it reaches that limit; GameLOD and the
+// options can also switch the limiter off (m_useFpsLimit). Without a guard one key press could leave
+// logic = render rate with no limiter, i.e. the R1 bug again. The guard keeps the *envelope*:
+//   * the render limiter stays on, with a limit in [logicHz, max(cap, 60)];
+//   * with the scale switched off (the key's "as fast as the render rate" state) the game runs at the
+//     limited render rate, so speed-up is bounded by max(cap, 60) / 30 (1.5x at the default cap);
+//   * every new game (game mode change or the logic frame counter going backwards) starts from the
+//     policy default again (30 Hz, cap), so a speed change never leaks into the next match;
+//   * network games keep the network frame rate (getActualLogicTimeScaleFps returns it) and are not touched.
+// Quest could adopt the same policy (Android keeps its current behaviour, see docs).
+namespace {
+struct FramePolicy {
+	unsigned flags = 0;
+	int logicHz = 30;
+	int renderCap = 0;
+	int lastMode = -1;
+	unsigned lastLogicFrame = ~0u;
+	unsigned fixes = 0;
+} s_policy;
+constexpr int kMaxRenderLimit = 60;
+
+void xrApplyLogicDefault()
+{
+	if ((s_policy.flags & XRBOOT_POLICY_LOGIC_TIME_SCALE) && TheFramePacer != nullptr) {
+		TheFramePacer->enableLogicTimeScale(TRUE);
+		TheFramePacer->setLogicTimeScaleFps(s_policy.logicHz);
+	}
+}
+void xrApplyRenderDefault()
+{
+	if ((s_policy.flags & XRBOOT_POLICY_RENDER_CAP) && s_policy.renderCap > 0 && TheFramePacer != nullptr) {
+		TheFramePacer->enableFramesPerSecondLimit(TRUE);
+		if (TheGlobalData != nullptr) { // setFramesPerSecondLimit logs TheGlobalData in debug builds
+			TheWritableGlobalData->m_useFpsLimit = TRUE;
+			TheFramePacer->setFramesPerSecondLimit(s_policy.renderCap);
+		}
+	}
+}
+} // namespace
+
+static void xrFramePolicyBegin(unsigned flags, int logicHz, int renderCap)
+{
+	s_policy = FramePolicy();
+	s_policy.flags = flags;
+	s_policy.logicHz = logicHz < 5 ? 30 : logicHz;
+	s_policy.renderCap = renderCap;
+	xrApplyLogicDefault();
+	if ((flags & XRBOOT_POLICY_RENDER_CAP) && renderCap > 0 && TheFramePacer != nullptr) {
+		TheFramePacer->enableFramesPerSecondLimit(TRUE);
+	}
+	GXLOG("frame policy: logic time scale %s at %d Hz, render limiter %s%s%s, key guard %s",
+	      (flags & XRBOOT_POLICY_LOGIC_TIME_SCALE) ? "ON" : "off", s_policy.logicHz,
+	      ((flags & XRBOOT_POLICY_RENDER_CAP) && renderCap > 0) ? "ON at " : "off",
+	      ((flags & XRBOOT_POLICY_RENDER_CAP) && renderCap > 0) ? std::to_string(renderCap).c_str() : "",
+	      ((flags & XRBOOT_POLICY_RENDER_CAP) && renderCap > 0) ? " fps" : "",
+	      (flags & XRBOOT_POLICY_GUARD_TIME_KEYS) ? "ON" : "off");
+}
+
+static void xrFramePolicyEndOfInit()
+{
+	xrApplyLogicDefault();
+	xrApplyRenderDefault();
+}
+
+// Once per engine frame, before executeSingleFrame().
+static void xrFramePolicyGuard()
+{
+	if (!(s_policy.flags & XRBOOT_POLICY_GUARD_TIME_KEYS) || TheFramePacer == nullptr || TheGlobalData == nullptr) {
+		return;
+	}
+	unsigned fixed = 0;
+	if ((s_policy.flags & XRBOOT_POLICY_RENDER_CAP) && s_policy.renderCap > 0) {
+		if (!TheGlobalData->m_useFpsLimit) { TheWritableGlobalData->m_useFpsLimit = TRUE; ++fixed; }
+		if (!TheFramePacer->isFramesPerSecondLimitEnabled()) { TheFramePacer->enableFramesPerSecondLimit(TRUE); ++fixed; }
+		const int lo = s_policy.logicHz, hi = std::max(s_policy.renderCap, kMaxRenderLimit);
+		const int limit = TheFramePacer->getFramesPerSecondLimit();
+		if (limit < lo || limit > hi) { TheFramePacer->setFramesPerSecondLimit(std::clamp(limit, lo, hi)); ++fixed; }
+	}
+	if ((s_policy.flags & XRBOOT_POLICY_LOGIC_TIME_SCALE) && TheNetwork == nullptr && TheGameLogic != nullptr) {
+		const int mode = (int)TheGameLogic->getGameMode();
+		const unsigned frame = TheGameLogic->getFrame();
+		if (mode != s_policy.lastMode || frame < s_policy.lastLogicFrame) {
+			// A new match (or shell/game switch): the speed keys start from the policy default again.
+			if (s_policy.lastMode != -1 && (!TheFramePacer->isLogicTimeScaleEnabled() ||
+			    TheFramePacer->getLogicTimeScaleFps() != s_policy.logicHz)) ++fixed;
+			xrApplyLogicDefault();
+			xrApplyRenderDefault();
+		} else if (TheFramePacer->isLogicTimeScaleEnabled() && TheFramePacer->getLogicTimeScaleFps() < s_policy.logicHz) {
+			TheFramePacer->setLogicTimeScaleFps(s_policy.logicHz); ++fixed;
+		}
+		s_policy.lastMode = mode;
+		s_policy.lastLogicFrame = frame;
+	}
+	if (fixed != 0) {
+		s_policy.fixes += fixed;
+		GXLOG("frame policy guard: %u correction(s) (total %u); logic scale %s %d Hz, render limit %d %s",
+		      fixed, s_policy.fixes, TheFramePacer->isLogicTimeScaleEnabled() ? "on" : "off",
+		      TheFramePacer->getLogicTimeScaleFps(), TheFramePacer->getFramesPerSecondLimit(),
+		      TheFramePacer->isFramesPerSecondLimitEnabled() ? "enabled" : "disabled");
+	}
+}
+
+// ---- effective simulation rate ---------------------------------------------------------------
+namespace {
+struct RateWindow {
+	std::chrono::steady_clock::time_point start;
+	bool open = false;
+	unsigned logicStart = 0;
+	unsigned frames = 0, inGameFrames = 0;
+} s_rate;
+bool xrLogicRunning()
+{
+	return TheGameLogic != nullptr && TheGameLogic->isInGame() && !TheGameLogic->isInShellGame() && !TheGameLogic->isGamePaused();
+}
+} // namespace
+static void xrRateCountFrame()
+{
+	if (!s_rate.open) {
+		s_rate = RateWindow();
+		s_rate.open = true;
+		s_rate.start = std::chrono::steady_clock::now();
+		s_rate.logicStart = TheGameLogic != nullptr ? TheGameLogic->getFrame() : 0;
+	}
+	++s_rate.frames;
+	if (xrLogicRunning()) ++s_rate.inGameFrames;
+}
+bool XrGameBoot_SampleLogicRate(XrLogicRate &out, double minSeconds)
+{
+	if (!s_rate.open) return false;
+	const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - s_rate.start).count();
+	if (seconds < minSeconds) return false;
+	const unsigned logicNow = TheGameLogic != nullptr ? TheGameLogic->getFrame() : 0;
+	const bool forward = logicNow >= s_rate.logicStart;
+	out.seconds = seconds;
+	out.engineFrames = s_rate.frames;
+	out.logicFrames = forward ? logicNow - s_rate.logicStart : 0;
+	out.engineFps = s_rate.frames / seconds;
+	out.logicHz = out.logicFrames / seconds;
+	out.inGame = forward && s_rate.frames > 0 && s_rate.inGameFrames == s_rate.frames;
+	s_rate.open = false; // the next frame opens a new window
+	return true;
+}
+
+// ---- host lifecycle -----------------------------------------------------------------------------
+// Same effect as SDL3GameEngine's DID_ENTER_BACKGROUND / DID_ENTER_FOREGROUND handling: silence the
+// audio, drop pointer state, and put back only what this pause changed. Engine thread only.
+static bool s_audioPausedByHost = false;
+void XrGameBoot_SetHostPaused(bool paused)
+{
+	if (!s_booted) {
+		return;
+	}
+	if (paused) {
+		XrGameBoot_Pointer(false, 0, 0, false, false, 0); // releases held buttons, cancels edge scrolling
+		if (TheMouse) {
+			TheMouse->loseFocus();
+		}
+		if (TheLookAtTranslator) {
+			TheLookAtTranslator->cancelScrolling();
+		}
+		if (TheAudio && !s_audioPausedByHost) {
+			s_audioPausedByHost = true;
+			TheAudio->pauseAudio(AudioAffect_All);
+		}
+	} else {
+		if (TheMouse) {
+			TheMouse->regainFocus();
+			TheMouse->refreshCursorCapture();
+		}
+		if (TheAudio && s_audioPausedByHost) {
+			s_audioPausedByHost = false;
+			// Do not restart the battlefield behind an open pause menu: GameLogic paused everything but
+			// the music on its own account.
+			const Bool gamePaused = (TheGameLogic != nullptr && TheGameLogic->isGamePaused());
+			TheAudio->resumeAudio(gamePaused ? AudioAffect_Music : AudioAffect_All);
+		}
+	}
+	GXLOG("host %s", paused ? "paused (audio silenced, pointer released)" : "resumed");
+}
+#endif // GX_PLATFORM_VISIONOS
+
+// ---------------------------------------------------------------------------
+// Boot tail shared by every host entry: SDL events, critsecs, memory manager, Version, command
+// line, offscreen mode, d3d8gles XR config and the engine itself. On Android it is exactly the
+// second half of the original XrGameBoot_Init (moved into a function, statements unchanged).
+// ---------------------------------------------------------------------------
+struct XrBootTail {
+	void *eglDisplay = nullptr;
+	void *eglContext = nullptr;
+	void *(*getProcAddress)(const char *) = nullptr;
+	unsigned glFlags = 0;
+	int width = kXrGameWidth;
+	int height = kXrGameHeight;
+	unsigned policy = 0;
+	int logicHz = 30;
+	int renderFpsCap = 0;
+};
+
+static bool xrBootTail(const XrBootTail &tail)
+{
+	// -- SDL: events only (no video -- no window; no audio -- OpenAL) -----
+	// pollSDL3Events()/SDL_GetTicks() need the events subsystem to be a
+	// well-defined no-op source; video/audio would both require the
+	// SDLActivity this flavor deliberately doesn't have.
+	SDL_SetMainReady(); // the host entry intentionally bypasses SDL_main.
+	if (!SDL_Init(SDL_INIT_EVENTS)) {
+		GXLOGE("SDL_Init(EVENTS) failed: %s", SDL_GetError());
+		return false;
+	} else {
+		GXLOG("SDL events initialized");
+	}
+
+	// -- Engine prerequisites (mirror SDL3Main) ---------------------------
+	TheAsciiStringCriticalSection = &s_xrCritSec1;
+	TheUnicodeStringCriticalSection = &s_xrCritSec2;
+	TheDmaCriticalSection = &s_xrCritSec3;
+	TheMemoryPoolCriticalSection = &s_xrCritSec4;
+	TheDebugLogCriticalSection = &s_xrCritSec5;
+	initMemoryManager();
+	TheVersion = NEW Version;
+
+	static char s_arg0[] = "generals-xr";
+	static char s_xresFlag[] = "-xres";
+	static char s_yresFlag[] = "-yres";
+	static char s_xresVal[16], s_yresVal[16];
+	snprintf(s_xresVal, sizeof(s_xresVal), "%d", tail.width);
+	snprintf(s_yresVal, sizeof(s_yresVal), "%d", tail.height);
+	static char *s_argv[] = { s_arg0, s_xresFlag, s_xresVal, s_yresFlag, s_yresVal, nullptr };
+	__argc = 5;
+	__argv = s_argv;
+	CommandLine::parseCommandLineForStartup();
+	GXLOG("command line: -xres %s -yres %s", s_xresVal, s_yresVal);
+
+	// -- Offscreen mode on, then boot the engine --------------------------
+	GX_XR_OffscreenBoot = true;
+	s_xrConfig.eglDisplay = tail.eglDisplay;
+	s_xrConfig.eglContext = tail.eglContext;
+	s_xrConfig.getProcAddress = tail.getProcAddress;
+	s_xrConfig.flags = tail.glFlags;
+	d3d8gles_SetXRConfig(&s_xrConfig);
+
+	// NOTE: no enableFramesPerSecondLimit(TRUE) here (GameMain does it for
+	// the 2D loop): the XR compositor paces via xrWaitFrame, and a sleep
+	// inside executeSingleFrame would stall the XR frame loop.
+	TheFramePacer = new FramePacer();
+#if defined(GX_PLATFORM_VISIONOS)
+	// GeneralsX @feature visionOS port (docs risk R1): the simulation must not follow the host frame
+	// rate. See xrFramePolicyBegin() for the rationale and the guard that keeps it in place.
+	xrFramePolicyBegin(tail.policy, tail.logicHz, tail.renderFpsCap);
+#endif
+	TheGameEngine = CreateGameEngine();
+	GXLOG("engine init starting (this takes ~a minute)...");
+	try {
+		TheGameEngine->init();
+	} catch (const std::exception &e) {
+		GXLOGE("engine init threw std::exception: %s", e.what());
+		return false;
+	} catch (...) {
+		GXLOGE("engine init threw (non-std exception, see xr log for [GX-RELEASECRASH] lines)");
+		return false;
+	}
+	if (TheDisplay != nullptr) {
+		GXLOG("engine init complete: display %dx%d", TheDisplay->getWidth(), TheDisplay->getHeight());
+	} else {
+		GXLOGE("engine init complete but TheDisplay is null");
+		return false;
+	}
+#if defined(GX_PLATFORM_VISIONOS)
+	// Engine init re-reads the FPS limit from the options (GameEngine::init); put the policy back.
+	xrFramePolicyEndOfInit();
+#endif
+	s_booted = true;
+	return true;
+}
+
+#ifdef __ANDROID__
 bool XrGameBoot_Init(JNIEnv *env, jobject activity, void *eglDisplay, void *eglContext)
 {
 	GXLOG("XrGameBoot_Init: enter (CI build %d)", ANDROID_CI_BUILD_NUMBER);
@@ -362,69 +758,99 @@ bool XrGameBoot_Init(JNIEnv *env, jobject activity, void *eglDisplay, void *eglC
 		}
 	}
 
-	// -- SDL: events only (no video -- no window; no audio -- OpenAL) -----
-	// pollSDL3Events()/SDL_GetTicks() need the events subsystem to be a
-	// well-defined no-op source; video/audio would both require the
-	// SDLActivity this flavor deliberately doesn't have.
-	SDL_SetMainReady(); // JNI entry intentionally bypasses SDL_main.
-	if (!SDL_Init(SDL_INIT_EVENTS)) {
-		GXLOGE("SDL_Init(EVENTS) failed: %s", SDL_GetError());
-		return false;
-	} else {
-		GXLOG("SDL events initialized");
-	}
-
-	// -- Engine prerequisites (mirror SDL3Main) ---------------------------
-	TheAsciiStringCriticalSection = &s_xrCritSec1;
-	TheUnicodeStringCriticalSection = &s_xrCritSec2;
-	TheDmaCriticalSection = &s_xrCritSec3;
-	TheMemoryPoolCriticalSection = &s_xrCritSec4;
-	TheDebugLogCriticalSection = &s_xrCritSec5;
-	initMemoryManager();
-	TheVersion = NEW Version;
-
-	static char s_arg0[] = "generals-xr";
-	static char s_xresFlag[] = "-xres";
-	static char s_yresFlag[] = "-yres";
-	static char s_xresVal[16], s_yresVal[16];
-	snprintf(s_xresVal, sizeof(s_xresVal), "%d", kXrGameWidth);
-	snprintf(s_yresVal, sizeof(s_yresVal), "%d", kXrGameHeight);
-	static char *s_argv[] = { s_arg0, s_xresFlag, s_xresVal, s_yresFlag, s_yresVal, nullptr };
-	__argc = 5;
-	__argv = s_argv;
-	CommandLine::parseCommandLineForStartup();
-	GXLOG("command line: -xres %s -yres %s", s_xresVal, s_yresVal);
-
-	// -- Offscreen mode on, then boot the engine --------------------------
-	GX_XR_OffscreenBoot = true;
-	s_xrConfig.eglDisplay = eglDisplay;
-	s_xrConfig.eglContext = eglContext;
-	d3d8gles_SetXRConfig(&s_xrConfig);
-
-	// NOTE: no enableFramesPerSecondLimit(TRUE) here (GameMain does it for
-	// the 2D loop): the XR compositor paces via xrWaitFrame, and a sleep
-	// inside executeSingleFrame would stall the XR frame loop.
-	TheFramePacer = new FramePacer();
-	TheGameEngine = CreateGameEngine();
-	GXLOG("engine init starting (this takes ~a minute)...");
-	try {
-		TheGameEngine->init();
-	} catch (const std::exception &e) {
-		GXLOGE("engine init threw std::exception: %s", e.what());
-		return false;
-	} catch (...) {
-		GXLOGE("engine init threw (non-std exception, see xr log for [GX-RELEASECRASH] lines)");
-		return false;
-	}
-	if (TheDisplay != nullptr) {
-		GXLOG("engine init complete: display %dx%d", TheDisplay->getWidth(), TheDisplay->getHeight());
-	} else {
-		GXLOGE("engine init complete but TheDisplay is null");
-		return false;
-	}
-	s_booted = true;
-	return true;
+	XrBootTail tail;
+	tail.eglDisplay = eglDisplay;
+	tail.eglContext = eglContext;
+	return xrBootTail(tail);
 }
+#endif // __ANDROID__
+
+#if !defined(__ANDROID__)
+// ---------------------------------------------------------------------------
+// visionOS front half: what the Android XrGameBoot_Init discovers through JNI and marker files is
+// handed over in XrGameBootHostConfig; the rest is the shared tail.
+// ---------------------------------------------------------------------------
+static bool xrHostHasFile(const std::string &dir, const char *name)
+{
+	const std::string path = dir + "/" + name;
+	return access(path.c_str(), R_OK) == 0;
+}
+
+bool XrGameBoot_InitHost(const XrGameBootHostConfig &cfg)
+{
+	s_lastError.clear();
+	if (cfg.logPath != nullptr && cfg.logPath[0] != '\0') {
+		XrGameBoot_InstallLogSink(cfg.logPath, cfg.logTee);
+	}
+	GXLOG("XrGameBoot_InitHost: enter (CI build %d)", ANDROID_CI_BUILD_NUMBER);
+	if (s_booted) {
+		GXLOGE("the engine is already booted; its singletons are not restart-safe (boot once per process)");
+		return false;
+	}
+	const auto text = [](const char *value) { return std::string(value != nullptr ? value : ""); };
+	const std::string zhRoot = text(cfg.zhRoot), baseRoot = text(cfg.baseRoot), userData = text(cfg.userDataRoot),
+	                  support = text(cfg.appSupportRoot);
+	if (zhRoot.empty() || userData.empty() || support.empty()) {
+		GXLOGE("incomplete host config: zhRoot='%s' userDataRoot='%s' appSupportRoot='%s'", zhRoot.c_str(), userData.c_str(),
+		       support.c_str());
+		return false;
+	}
+	if (!xrHostHasFile(zhRoot, "INIZH.big")) {
+		GXLOGE("the Zero Hour folder has no INIZH.big: %s", zhRoot.c_str());
+		return false;
+	}
+	GXLOG("paths: zh=%s base=%s userData=%s support=%s", zhRoot.c_str(), baseRoot.empty() ? "<none>" : baseRoot.c_str(),
+	      userData.c_str(), support.c_str());
+	mkdirParents(support.c_str());
+	mkdirParents(userData.c_str());
+
+	s_legacyLayoutPath = support + "/xr-layout-v1.cfg";
+	s_layoutPath = support + "/xr-layout-v2.cfg";
+	s_textLanguagePath = support + "/game_language.cfg";
+	if (cfg.textLanguage != nullptr && cfg.textLanguage[0] != '\0') {
+		setenv("GENERALSX_TEXT_LANGUAGE", cfg.textLanguage, 1);
+	} else if (FILE *language = fopen(s_textLanguagePath.c_str(), "r")) {
+		char token[64] = {};
+		if (fscanf(language, "%63[a-z]", token) == 1) setenv("GENERALSX_TEXT_LANGUAGE", token, 1);
+		fclose(language);
+	}
+	s_cameraPath = support + "/xr-camera-v1.cfg";
+	s_hasCameraFavorite = s_cameraFavorite.load(s_cameraPath.c_str());
+
+	setenv("HOME", support.c_str(), 1); // registry.ini
+	setenv("GENERALSX_USERDATA_DIR", userData.c_str(), 1);
+	setenv("CNC_GENERALS_ZH_PATH", zhRoot.c_str(), 1);
+	if (!baseRoot.empty()) {
+		setenv("CNC_GENERALS_PATH", baseRoot.c_str(), 1);
+	}
+	if (chdir(zhRoot.c_str()) != 0) {
+		GXLOGE("chdir(%s) failed: %s", zhRoot.c_str(), strerror(errno));
+		return false;
+	}
+	GXLOG("working directory: %s", zhRoot.c_str());
+
+	if (cfg.policy & XRBOOT_POLICY_SEED_OPTIONS) {
+		const std::string optionsPath = userData + "/Options.ini";
+		if (access(optionsPath.c_str(), F_OK) != 0 && access("DefaultOptions.ini", R_OK) == 0) {
+			std::error_code ec;
+			std::filesystem::copy_file("DefaultOptions.ini", optionsPath, ec);
+			GXLOG("seeded default Options.ini (%s)", ec ? ec.message().c_str() : "ok");
+		}
+	}
+
+	XrBootTail tail;
+	tail.eglDisplay = cfg.eglDisplay;
+	tail.eglContext = cfg.eglContext;
+	tail.getProcAddress = cfg.getProcAddress;
+	tail.glFlags = cfg.glFlags;
+	tail.width = cfg.renderWidth > 0 ? cfg.renderWidth : kXrGameWidth;
+	tail.height = cfg.renderHeight > 0 ? cfg.renderHeight : kXrGameHeight;
+	tail.policy = cfg.policy;
+	tail.logicHz = cfg.logicHz;
+	tail.renderFpsCap = cfg.renderFpsCap;
+	return xrBootTail(tail);
+}
+#endif // !__ANDROID__
 
 // GeneralsX @bugfix Codex 14/09/2026 Device display yields presentation only.
 static void (*s_loadingPresenter)(void *)=nullptr;
@@ -453,8 +879,14 @@ Bool XrGameBoot_Frame()
 		// but skip volume update/render in B. Existing decal shadows are retained;
 		// this does not invent replacement shadows for volume-only templates.
 		if(GX_XR_WorldRequested()) {TheWritableGlobalData->m_useShadowVolumes=s_worldFrame.volumeShadows;TheWritableGlobalData->m_useShadowDecals=TRUE;TheWritableGlobalData->m_enableBehindBuildingMarkers=FALSE;}
+#if defined(GX_PLATFORM_VISIONOS)
+		xrFramePolicyGuard();
+#endif
 		const Bool running=TheGameEngine->executeSingleFrame();
 		++s_xrPresentationFrame;
+#if defined(GX_PLATFORM_VISIONOS)
+		xrRateCountFrame();
+#endif
 		return running;
 	} catch (const std::exception &e) {
 		GXLOGE("frame threw std::exception: %s", e.what());
@@ -1584,6 +2016,6 @@ void XrGameBoot_Shutdown()
 	SDL_Quit();
 }
 
-#else // !__ANDROID__
-#error "XrGameBoot.cpp is Android-only"
+#else // !GX_XR_HOST
+#error "XrGameBoot.cpp needs an XR host platform (Android or visionOS, see gx_backend.h)"
 #endif
