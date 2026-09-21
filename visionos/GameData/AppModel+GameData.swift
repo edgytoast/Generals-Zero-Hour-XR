@@ -227,6 +227,8 @@ extension AppModel {
     func handlePickerResult(_ result: Result<[URL], Error>) {
         switch result {
         case .failure(let error):
+            // Dismissing the picker is not an error.
+            if let cocoa = error as? CocoaError, cocoa.code == .userCancelled { return }
             notice("The folder could not be opened: \(error.localizedDescription)", error: true)
         case .success(let urls):
             guard let url = urls.first else { return }
@@ -288,6 +290,13 @@ extension AppModel {
         setGameData(.importing(initial))
         print("[GameData] import start: zh=\(report.zhRoot) base=\(report.baseRoot)")
 
+        if let delay = LaunchOptions.importCancelAfterSeconds {
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                print("[GameData] -importCancelAfter: pressing Cancel")
+                self?.cancelImport()
+            }
+        }
         importTask = Task { [weak self] in
             let result = await Task.detached { () -> GXGDInstallResult in
                 GXGameDataService.installReport(report, token: token) { progress in
@@ -381,6 +390,8 @@ extension AppModel {
             if UserDefaults.standard.string(forKey: Keys.activeSource) == GameDataSource.imported.rawValue {
                 UserDefaults.standard.removeObject(forKey: Keys.activeSource)
             }
+            clearImportSource()
+            interruptedImport = nil
             notice("Imported game data removed.")
             await evaluateAvailableData()
         }
