@@ -3654,5 +3654,15 @@ void GXAudio_EngineResume(void)
 
 bool GXAudio_IsEnginePaused(void) { return s_gxHostPause.wanted(); }
 
+bool GXAudio_EngineReopenDevice(void)
+{
+	ALCdevice* dev = s_gxDevice.load();
+	if (!dev || !alcIsExtensionPresent(dev, "ALC_SOFT_reopen_device")) {
+		return false;
+	}
+	LPALCREOPENDEVICESOFT reopenFn = reinterpret_cast<LPALCREOPENDEVICESOFT>(alcGetProcAddress(dev, "alcReopenDeviceSOFT"));
+	return reopenFn && reopenFn(dev, nullptr, nullptr) == ALC_TRUE;
+}
+
 }  // extern "C"
 #endif  // GX_PLATFORM_VISIONOS

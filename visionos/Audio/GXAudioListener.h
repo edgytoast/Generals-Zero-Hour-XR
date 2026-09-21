@@ -78,6 +78,10 @@ void GXAudio_EnginePause(void);
 void GXAudio_EngineResume(void);
 bool GXAudio_IsEnginePaused(void);
 
+// Reopens the default output device in place (ALC_SOFT_reopen_device): sources, buffers and listener state survive. For
+// media-services resets and, if a device listening test shows the need, route changes. Returns false if unsupported/failed.
+bool GXAudio_EngineReopenDevice(void);
+
 #ifdef __cplusplus
 }
 #endif
