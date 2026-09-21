@@ -271,4 +271,10 @@ target_link_libraries(z_ww3d2 PRIVATE
 # dlopen'd) when the runtime backend switch selects GLES; needs d3d8gles.h.
 if(ANDROID)
     target_link_libraries(z_ww3d2 PRIVATE d3d8gles)
+elseif(SAGE_BUILD_VISIONOS_LIB AND TARGET d3d8gles)
+    # GeneralsX @build visionOS port: same backend, and the GX_USES_D3D8GLES sites in the
+    # engine sources (render2d.cpp, dx8wrapper.cpp, ...) include d3d8gles.h. PUBLIC so the
+    # other engine libraries (z_gameenginedevice: HeightMap, W3DSmudge, W3DProjectedShadow)
+    # that link z_ww3d2 see the include directory and GX_D3D8GLES_BACKEND as well.
+    target_link_libraries(z_ww3d2 PUBLIC d3d8gles)
 endif()
