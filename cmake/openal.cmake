@@ -32,14 +32,22 @@ if(SAGE_USE_OPENAL)
     set(_openal_patch_args)
     if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
         # GeneralsX @build visionOS port: openal-soft 1.24.2 does not know visionOS.
-        # Two one-line fixes, stored as cmake/patches/openal-soft-1.24.2-visionos.patch:
+        # Three one-line fixes, stored as cmake/patches/openal-soft-1.24.2-visionos.patch:
         #  - alc/backends/coreaudio.cpp includes IOKit/audio/IOAudioTypes.h unless
         #    TARGET_OS_IOS/TARGET_OS_TV; that header does not exist in the xros SDKs
         #    (add TARGET_OS_VISION so device enumeration is compiled out).
         #  - CMakeLists.txt links -framework AudioUnit,ApplicationServices (macOS
         #    only) unless the system name is iOS/tvOS; add visionOS to that regex.
+        #  - common/alsem.h only uses libdispatch semaphores for iOS/tvOS; on visionOS it
+        #    falls back to POSIX sem_init(), which Darwin lacks, so the first al::semaphore
+        #    throws system_error(EAGAIN) inside alcCreateContext and the process aborts
+        #    (found by the audio package: scripts/qa/vision-audio-openal-test.sh).
+        # The patch file's hash is part of the command line so that editing the patch makes
+        # FetchContent re-patch an already populated source tree.
+        file(SHA256 "${CMAKE_SOURCE_DIR}/cmake/patches/openal-soft-1.24.2-visionos.patch" _openal_patch_hash)
         set(_openal_patch_args PATCH_COMMAND ${CMAKE_COMMAND}
             "-DPATCH_FILE=${CMAKE_SOURCE_DIR}/cmake/patches/openal-soft-1.24.2-visionos.patch"
+            "-DPATCH_HASH=${_openal_patch_hash}"
             -P "${CMAKE_SOURCE_DIR}/cmake/patches/apply-patch.cmake")
         # A static archive is what the host app links (openal-soft defaults to
         # SHARED unless LIBTYPE says otherwise).
