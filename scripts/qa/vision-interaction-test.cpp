@@ -5,6 +5,7 @@
 // XRInteraction events collected since the last frame, and checks (a) the calls the engine bridge received (the
 // same XrGameBoot_* surface the Quest host drives) and (b) the VisionInteractionOutput consumed by the renderer.
 #include "visionos/VisionInteraction.h"
+#include "visionos/VisionFrameDriver.h"
 #include "../../visionos/Input/GXXRInput.h"
 
 #include <cstdio>
@@ -563,6 +564,28 @@ static void testBoxSelect() {
 	// second frame: spatial pointer released after the engine consumed the drop
 	s.frame();
 	CHECK(!s.bridge.of(C::SpatialPointer).back().f1);
+}
+
+static void testEyeOriginFromHand() {
+	// If the platform's pinch ray starts at the HAND instead of the eye, the amplification model must use the tracked head
+	// (a ray origin at the hand would make the head->hand direction degenerate).
+	Sim s;
+	const XrVector3f hand0 = H0();
+	const XrVector3f target = visionBoardToWorld(s.host.board, {-0.2f, 0.0f, 0});
+	s.begin(1, XR_HAND_RIGHT, target, hand0);
+	{
+		XrVector3f d = xrSub(target, hand0);
+		const float l = xrLength(d);
+		s.queue.back().ray_world.origin = {hand0.x, hand0.y, hand0.z};
+		s.queue.back().ray_world.direction = {d.x / l, d.y / l, d.z / l};
+	}
+	s.frame();
+	XrVector3f hand = hand0;
+	for (int i = 1; i <= 10; ++i) { hand = plus(hand0, 0.012f * i, 0, 0); s.move(1, XR_HAND_RIGHT, hand); s.frame(); }
+	CHECK(s.out.box.active);
+	const XrVector3f cursor = xrAdd(target, xrSub(planeHit(hand, 0.8f), planeHit(hand0, 0.8f)));
+	const XrVector3f cl = visionBoardToLocal(s.host.board, cursor);
+	NEAREPS(s.out.box.maxX, std::max(-0.2f, cl.x), 2e-3f);
 }
 
 static void testBoxAdditiveAndCancel() {
@@ -1236,6 +1259,31 @@ static void testGroundView() {
 		CHECK(s.out.mode == VisionMode::Select);
 		s.end(6, XR_HAND_RIGHT, hand);
 		s.frame();
+	}
+	// ---- gesture entry: a still pinch held on the pan handle arms Ground View; dragging it pans instead
+	{
+		Sim g;
+		const float hyy = 0.5625f * 0.5f;
+		g.beginAtBoard(1, XR_HAND_RIGHT, 0.0f, hyy + 0.03f, hand);
+		g.seconds(0.75);
+		CHECK(g.out.mode == VisionMode::CameraPan && g.out.ground.mode == XrObserverMode::Off);
+		CHECK(g.out.ground.holdProgress > 0.3f && g.out.ground.holdProgress < 0.7f);
+		g.seconds(1.0);
+		CHECK(g.out.ground.mode == XrObserverMode::Armed);
+		g.end(1, XR_HAND_RIGHT, hand); // the arming pinch is swallowed
+		g.frames(3);
+		CHECK(g.out.ground.mode == XrObserverMode::Armed && g.bridge.count(C::ObsPick) == 0);
+		Sim d;
+		d.beginAtBoard(1, XR_HAND_RIGHT, 0.0f, hyy + 0.03f, hand);
+		d.seconds(0.5);
+		d.move(1, XR_HAND_RIGHT, plus(hand, 0.05f, 0, 0));
+		d.seconds(1.5);
+		CHECK(d.out.ground.mode == XrObserverMode::Off && d.out.ground.holdProgress == 0);
+		Sim n;
+		n.bridge.canObserve = false;
+		n.beginAtBoard(1, XR_HAND_RIGHT, 0.0f, hyy + 0.03f, hand);
+		n.seconds(2.0);
+		CHECK(n.out.ground.mode == XrObserverMode::Off);
 	}
 	// ---- exit by command, cancel while armed, forced exit when the engine withdraws permission
 	{
@@ -1986,6 +2034,102 @@ static void testInteractionApiCompat() {
 	CHECK(offsetof(XRInteractionEvent, midpoint_world) < offsetof(XRInteractionEvent, modifiers));
 }
 
+// ---- the per-frame glue package C calls (VisionFrameDriver): compositor frame -> host state -> update -> world frame
+static XRFrameInfo makeFrame(uint64_t index, double t, XrVector3f head) {
+	XRFrameInfo f = {};
+	f.frame_index = index;
+	f.predicted_display_time_s = t;
+	f.head_tracked = true;
+	f.head_pose = {{head.x, head.y, head.z}, {0, 0, 0, 1}};
+	f.eye_count = 2;
+	f.eyes[0].pose = {{-0.031f, head.y, head.z}, {0, 0, 0, 1}};
+	f.eyes[1].pose = {{0.031f, head.y, head.z}, {0, 0, 0, 1}};
+	f.eyes[0].fov = {-0.80f, 0.60f, 0.55f, -0.70f};
+	f.eyes[1].fov = {-0.60f, 0.80f, 0.55f, -0.70f};
+	return f;
+}
+
+static void testFrameDriver() {
+	FakeBridge bridge;
+	bridge.canObserve = false;
+	bridge.expanded = false;
+	VisionFrameDriver d(&bridge);
+	XRInteraction_ClearBoardTransform();
+	XrWorldFrame world;
+	const XRFrameInfo f0 = makeFrame(41, 200.0, kHead);
+
+	// helpers
+	const XrPosef p = visionPoseFromXR({{1, 2, 3}, {0, 0.7071068f, 0, 0.7071068f}});
+	VNEAR(p.position, (XrVector3f{1, 2, 3}));
+	NEAR(p.orientation.y, 0.7071068f);
+
+	// frame 1: host state comes from the compositor frame, the layer proposes the initial board, the world frame gets it
+	CHECK(!d.boardPlaced());
+	const VisionInteractionOutput &out = d.step(f0, true, nullptr, 0, world);
+	CHECK(d.host().frame == 41 && near(float(d.host().time_s), 200.0f) && d.host().sessionFocused && d.host().headTracked);
+	VNEAR(d.host().head.position, kHead);
+	CHECK(!d.host().engine.canObserveGround); // captured through the bridge
+	CHECK(d.host().engine.canAdjustWorld && d.host().engine.interactiveGame);
+	CHECK(out.boardChanged && d.boardPlaced());
+	VNEAR(world.board.pose.position, (XrVector3f{0, 0.8f, -0.9f}));
+	NEAR(world.board.width, 1.0f);
+	NEAR(world.coverage, xrMapCoverage(1.0f, 1.0f));
+	VNEAR(world.eyes[0].position, (XrVector3f{-0.031f, 1.5f, 0}));
+	VNEAR(world.eyes[1].position, (XrVector3f{0.031f, 1.5f, 0}));
+	NEAR(world.fov[0].angleLeft, -0.80f);
+	NEAR(world.fov[1].angleRight, 0.80f);
+	NEAR(world.fov[1].angleDown, -0.70f);
+	CHECK(!world.observer);
+
+	// the shell input layer was told where the board is: a ray straight down through the board centre hits it
+	XRRay ray = {{0, 1.5f, -0.9f}, {0, -1, 0}};
+	XRBoardHit hit = XRInteraction_IntersectBoard(&ray);
+	CHECK(hit.valid && hit.on_board);
+
+	// frame 2: stable (no re-proposal), panel table is copied, posted commands are drained into the state machine
+	XRInteraction_PostCommand(XR_CMD_SET_ADDITIVE, 1);
+	VisionPanel panels[8];
+	for (int i = 0; i < 8; ++i)
+		panels[i] = visionMakePanel(kVisionPanelGameUI, {{0, 0, 0, 1}, {0, 1.2f, -0.7f}}, 0.8f, 0.5625f, {0, 0, 0.5f, 1});
+	const VisionInteractionOutput &out2 = d.step(makeFrame(42, 200.016, kHead), true, panels, 8, world);
+	CHECK(!out2.boardChanged && d.host().panelCount == kVisionMaxPanels);
+	CHECK(d.host().panels[0].visible && d.host().panels[0].kind == kVisionPanelGameUI);
+	NEAR(d.host().panels[0].surface.width, 0.8f);
+	NEAR(d.host().panels[0].rect.w, 0.5f);
+	CHECK(out2.additive);
+	CHECK(d.interaction().additiveToggle());
+
+	// Ground View flows into the world frame through the same call
+	bridge.canObserve = true;
+	d.interaction().command(XR_CMD_ENTER_GROUND_VIEW, 0);
+	d.step(makeFrame(43, 200.03, kHead), true, nullptr, 0, world);
+	CHECK(d.output().ground.mode == XrObserverMode::Armed && !world.observer);
+
+	// paused / unfocused session: input suspended, everything cancelled, the engine is never left with a held button
+	d.step(makeFrame(44, 200.05, kHead), false, nullptr, 0, world);
+	CHECK(!d.host().sessionFocused);
+	CHECK(d.output().ground.mode == XrObserverMode::Off);
+	d.reset(kVisionResetFocus);
+	// mono frame mirrors eye 0
+	XRFrameInfo mono = makeFrame(45, 200.07, kHead);
+	mono.eye_count = 1;
+	mono.eyes[1].pose.position = {9, 9, 9};
+	d.step(mono, true, nullptr, 0, world);
+	VNEAR(world.eyes[1].position, world.eyes[0].position);
+	// a board the shell already placed is kept
+	FakeBridge b2;
+	VisionFrameDriver d2(&b2);
+	d2.adoptBoard(flatBoard({0.3f, 0.7f, -1.1f}, 1.4f));
+	d2.step(f0, true, nullptr, 0, world);
+	CHECK(!d2.output().boardChanged);
+	VNEAR(world.board.pose.position, (XrVector3f{0.3f, 0.7f, -1.1f}));
+	NEAR(world.board.width, 1.4f);
+	// no bridge at all (shell without the engine): still moves the board
+	VisionFrameDriver d3(nullptr);
+	d3.step(f0, true, nullptr, 0, world);
+	CHECK(d3.boardPlaced());
+}
+
 int main() {
 	testHelpers();
 	testInitialPlacementProposal();
@@ -1993,6 +2137,7 @@ int main() {
 	testAdditive();
 	testContextCommand();
 	testBoxSelect();
+	testEyeOriginFromHand();
 	testBoxAdditiveAndCancel();
 	testBoxClampedToBoard();
 	testRimPan();
@@ -2010,6 +2155,7 @@ int main() {
 	testInteractionApiCompat();
 	testGlue();
 	testWorldFrameHelpers();
+	testFrameDriver();
 	printf("PASS %d vision interaction checks\n", checks);
 	return 0;
 }

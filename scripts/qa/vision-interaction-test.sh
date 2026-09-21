@@ -10,6 +10,8 @@
 #                (proves the shared Quest headers are untouched: same counts as before). Tests that need the OpenXR
 #                SDK (xr-interaction, xr-menu-routing) are run only when OPENXR_INCLUDE points at the SDK include dir.
 #
+# Also runs scripts/qa/vision-bridge-forward-test.sh (the forwarding engine bridge against recording XrGameBoot_* stand-ins).
+#
 # Environment: CXX (default clang++), TMPDIR, OPENXR_INCLUDE (optional real OpenXR headers for the two SDK tests).
 set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -31,6 +33,7 @@ flags=(-std=c++17 -Wall -Wextra -Wno-missing-field-initializers -fsanitize=undef
 "$CXX" "${flags[@]}" scripts/qa/vision-interaction-test.cpp "$main/visionos/VisionInteraction.cpp" \
   "$out_dir/GXXRInput.o" -framework Foundation -o "$out_dir/vision-interaction-test"
 "$out_dir/vision-interaction-test"
+"$repo_dir/scripts/qa/vision-bridge-forward-test.sh"
 
 if [[ "${1:-}" == "--existing" ]]; then
   total=0; passed=0; failed=0
@@ -58,6 +61,23 @@ if [[ "${1:-}" == "--existing" ]]; then
   if [[ -n "${OPENXR_INCLUDE:-}" ]]; then
     for t in interaction menu-routing; do run_one "xr-$t-test" -I"$OPENXR_INCLUDE"; done
   fi
+  # The bridge tests (scripts/qa/xr-*-test.sh) extract production functions from the engine sources and compile them with
+  # -I <build>/vcpkg_installed/arm64-android/include (where Android gets <openxr/openxr.h>). Point that argument at a
+  # directory whose include/ is the stand-in header. Tests that need the real SDK types (XrSpace, XrSession, ...), the
+  # Android SDK/NDK or a GL device are skipped, not failed.
+  mkdir -p "$out_dir/fakeandroid/vcpkg_installed/arm64-android"
+  ln -sfn "$repo_dir/$shim" "$out_dir/fakeandroid/vcpkg_installed/arm64-android/include"
+  for t in build-controls console-bridge height-bridge hover-info pick-bridge shadow-scope tactical-bridge trigger-bridge \
+           panel-text workspace scene loading-presenter; do
+    total=$((total+1))
+    if bash "scripts/qa/xr-$t-test.sh" "$out_dir/fakeandroid" >"$out_dir/xr-$t.sh.out" 2>&1; then
+      passed=$((passed+1)); printf '  ok   %-28s %s\n' "xr-$t-test.sh" "$(tail -1 "$out_dir/xr-$t.sh.out")"
+    elif grep -Eq "unknown type name '(Xr|PFN_xr)" "$out_dir/xr-$t.sh.out"; then
+      total=$((total-1)); printf '  SKIP %-28s (needs the real OpenXR SDK types)\n' "xr-$t-test.sh"
+    else
+      failed=$((failed+1)); printf '  FAIL %-28s\n' "xr-$t-test.sh"; tail -5 "$out_dir/xr-$t.sh.out"
+    fi
+  done
   # ground-observer reads source text
   total=$((total+1))
   if "$CXX" -std=c++17 -Wno-missing-field-initializers -I"$main" -I"$d3d" -I"$shim" scripts/qa/xr-ground-observer-test.cpp \

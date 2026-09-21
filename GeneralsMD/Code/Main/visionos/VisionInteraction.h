@@ -5,8 +5,10 @@
 // per-frame VisionHostState; outputs are calls on a VisionEngineBridge (the same
 // XrGameBoot_* surface the Quest host drives) and a VisionInteractionOutput that the
 // renderer / shell consume. It reuses the pure Quest headers (XrTactics.h,
-// XrPlacement.h, XrWorld.h, XrLayers.h, XrPanelLayout.h, XrBuildRotation.h math and
-// conventions) through xr_shim/openxr/openxr.h on non-OpenXR builds.
+// XrPlacement.h, XrWorld.h, XrLayers.h, XrPanelLayout.h, XrCommands.h, XrMath.h)
+// unchanged, through xr_shim/openxr/openxr.h on non-OpenXR builds. Building rotation
+// keeps the Quest engine call (RotatePlacement) but is driven by wrist twist instead of
+// the XrBuildRotation stick helper.
 //
 // Design in one paragraph: gaze+pinch gives one gaze ray at pinch start and hand motion
 // afterwards, never a continuous pointer. Every pinch is therefore classified ONCE, at
@@ -78,6 +80,7 @@ struct VisionConfig {
 	// --- Ground View ---
 	float groundTapMaxSeconds = 0.6f;
 	float groundExitHoldSeconds = 1.2f;   // stationary pinch held this long leaves Ground View
+	float groundEnterHoldSeconds = 1.5f;  // stationary pinch held on the board rim this long arms Ground View (0 = off)
 	float comfortFadeSeconds = 0.18f;     // black veil fade at every teleport / mode change
 	float teleportMaxMetres = 6.0f;       // furthest single teleport (observer scale)
 	float teleportStepUnits = 1.8f;       // engine ObserverStep limit is 2 game units per call
@@ -341,6 +344,7 @@ private:
 		XrQuaternionf rot0 = {0, 0, 0, 1}, rot = {0, 0, 0, 1};
 		bool hasRay = false;
 		XrVector3f rayO = {}, rayD = {0, 0, -1};
+		XrVector3f eye = {};           // eye position used for head->hand amplification (ray origin if it is at the head, else the head)
 		bool hasCurrentRay = false;
 		XrVector3f curRayO = {}, curRayD = {0, 0, -1};
 		float travel = 0;
