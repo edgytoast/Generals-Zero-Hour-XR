@@ -51,7 +51,9 @@ fi
 [[ ${#SLICES[@]} -gt 0 ]] || { echo "verify-engine.sh: nothing to verify; run build-engine.sh (and make-xcframework.sh) first" >&2; exit 1; }
 
 # Regex (over "_symbol" names) of symbols that other packages / the host provide.
-EXPECTED_RE='^_(Direct3DCreate8_GLES|d3d8gles_[A-Za-z0-9_]*|D3D8GLES_[A-Za-z0-9_]*|XrGameBoot_[A-Za-z0-9_]*|GX_XR_[A-Za-z0-9_]*|GXEngine[A-Za-z0-9_]*|GXHost[A-Za-z0-9_]*|VisionGameBoot[A-Za-z0-9_]*|egl[A-Z][A-Za-z0-9_]*|gl[A-Z][A-Za-z0-9_]*|EGL_[A-Za-z0-9_]*|GL_[A-Za-z0-9_]*)$'
+# The GX_XR_* hooks are C++ functions (mangled: __Z<len>GX_XR_...), the XrGameBoot_* / d3d8gles_* / GXEngine* / GXHost*
+# ones are extern "C" (plain _name); both spellings are accepted.
+EXPECTED_RE='^__Z[0-9]+(GX_XR_|XrGameBoot_|GXEngine|GXHost|VisionGameBoot)[A-Za-z0-9_]*|^_(Direct3DCreate8_GLES|d3d8gles_[A-Za-z0-9_]*|D3D8GLES_[A-Za-z0-9_]*|XrGameBoot_[A-Za-z0-9_]*|GX_XR_[A-Za-z0-9_]*|GXEngine[A-Za-z0-9_]*|GXHost[A-Za-z0-9_]*|VisionGameBoot[A-Za-z0-9_]*|egl[A-Z][A-Za-z0-9_]*|gl[A-Z][A-Za-z0-9_]*|EGL_[A-Za-z0-9_]*|GL_[A-Za-z0-9_]*)$'
 if [[ -n "${GX_EXPECTED_UNDEFINED_EXTRA:-}" ]]; then EXPECTED_RE="$EXPECTED_RE|${GX_EXPECTED_UNDEFINED_EXTRA}"; fi
 
 rc=0
