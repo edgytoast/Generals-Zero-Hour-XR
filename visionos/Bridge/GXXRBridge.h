@@ -33,6 +33,17 @@ typedef struct GXXRBridgeStatus {
     char depthFormat[24];
     bool foveation;
     char lastMessage[160];      // most recent notable event / error
+    // ---- appended for the ANGLE (GLES3-on-Metal) render path; older readers ignore these ----
+    bool angleActive;           // frames come from the ANGLE/GLES3 scene (or engine), not the direct-Metal scene
+    bool devicesMatch;          // ANGLE's MTLDevice is the Compositor Services device
+    char renderer[112];         // GL_RENDERER of the ANGLE context ("" when ANGLE is not in use)
+    char syncMode[40];          // "metal-shared-event" | "glFinish" | ""
+    double glSubmitMs;          // CPU ms per frame issuing GL (scene/engine + glFlush), 1 s average
+    double syncWaitMs;          // CPU ms per frame waiting on slot release / glFinish, 1 s average
+    double compositeMs;         // CPU ms per frame encoding the Metal composite, 1 s average
+    double frameMs;             // CPU ms per frame from submission start to commit, 1 s average
+    uint32_t loopGeneration;    // increments every time a (re)opened immersive space starts a render loop
+    uint64_t releaseTimeouts;   // ring-slot release waits that timed out
 } GXXRBridgeStatus;
 
 /// Hand the layer renderer from CompositorLayer{} to the bridge. Starts the render
@@ -46,6 +57,11 @@ void GXXRBridgeGetStatus(GXXRBridgeStatus* outStatus);
 ///   "externalEyeTextures": render the test scene into offscreen per-eye textures and
 ///     submit them through XRPresentation_SubmitEyeTexture, so the compositor-side
 ///     copy path the real engine will use is exercised.
+///   "angleTestScene": render the GLES 3.0 test scene through ANGLE (Metal) into host-owned
+///     ring targets instead of the direct-Metal scene. Also enabled by the launch argument
+///     -angleTestScene (read by the bridge itself).
+/// Other launch arguments read by the bridge: -angleEyeScale <f>, -angleAtlas,
+/// -angleSync glfinish, -angleTargetFormat rgba|bgra, -angleNoUIPanel.
 void GXXRBridgeSetBoolOption(const char* key, bool value);
 
 /// Ask for the tabletop to be re-placed in front of the current head pose.

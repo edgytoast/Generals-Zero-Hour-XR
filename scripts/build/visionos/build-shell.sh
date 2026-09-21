@@ -8,6 +8,11 @@
 #              .app cannot be installed on a headset. For a signed build open the generated
 #              project in Xcode and set your team, or pass DEVELOPMENT_TEAM=... in the environment.
 #
+# ANGLE (GLES 3.0 on Metal) must be built first with scripts/build/visionos/build-angle.sh. The install
+# root defaults to build-angle.sh's default; override it with GX_ANGLE_ROOT=/path/to/angle/install.
+# GX_ANGLE_LINK=static (default) links libANGLE.a + libtranslator.a into the app; GX_ANGLE_LINK=shared
+# embeds and signs libANGLE-shared.dylib in Frameworks/.
+#
 # Prints the built .app path on the last line of stdout (everything else goes to stderr).
 set -euo pipefail
 
@@ -30,6 +35,27 @@ while [[ $# -gt 0 ]]; do
 done
 
 command -v xcodegen >/dev/null || { echo "xcodegen not found (brew install xcodegen)" >&2; exit 1; }
+
+# ---- ANGLE ----------------------------------------------------------------------------------
+ANGLE_ROOT="${GX_ANGLE_ROOT:-/Users/jvadala/CandC/deps/angle/install}"   # build-angle.sh's default install root
+ANGLE_LINK="${GX_ANGLE_LINK:-static}"
+[[ "$ANGLE_LINK" == "static" || "$ANGLE_LINK" == "shared" ]] || { echo "GX_ANGLE_LINK must be static or shared" >&2; exit 2; }
+ANGLE_SLICE="xrsimulator"; [[ "$MODE" == "device" ]] && ANGLE_SLICE="xros"
+if [[ "$ANGLE_LINK" == "static" ]]; then ANGLE_NEED="$ANGLE_ROOT/$ANGLE_SLICE/lib/libANGLE.a"; else ANGLE_NEED="$ANGLE_ROOT/$ANGLE_SLICE/lib/libANGLE-shared.dylib"; fi
+if [[ ! -f "$ANGLE_NEED" || ! -d "$ANGLE_ROOT/$ANGLE_SLICE/include/EGL" ]]; then
+  BUILD_MODE="simulator"; [[ "$MODE" == "device" ]] && BUILD_MODE="device"
+  cat >&2 <<EOF
+error: ANGLE for the $ANGLE_SLICE slice was not found (missing $ANGLE_NEED).
+       The visionOS shell renders GLES 3.0 through ANGLE (Metal). Build it first:
+
+         scripts/build/visionos/build-angle.sh $BUILD_MODE      # or "all" for both slices
+
+       It installs to $ANGLE_ROOT by default (override with the DEPS_ROOT argument of that script),
+       or point this script at an existing install with GX_ANGLE_ROOT=/path/to/angle/install.
+EOF
+  exit 1
+fi
+export GX_ANGLE_ROOT="$ANGLE_ROOT" GX_ANGLE_LINK="$ANGLE_LINK"
 
 if [[ "$MODE" == "simulator" ]]; then
   SDK="xrsimulator"; DEST="generic/platform=visionOS Simulator"; PRODUCTS="$CONFIG-xrsimulator"
@@ -55,6 +81,7 @@ xcodebuild -project "$ROOT/visionos/GeneralsZHXR.xcodeproj" \
   -sdk "$SDK" \
   -destination "$DEST" \
   -derivedDataPath "$DERIVED" \
+  GX_ANGLE_ROOT="$ANGLE_ROOT" GX_ANGLE_LINK="$ANGLE_LINK" \
   ${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"} \
   "${ACTION[@]}" >"$LOG" 2>&1
 STATUS=$?
