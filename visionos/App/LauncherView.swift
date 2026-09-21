@@ -69,6 +69,7 @@ struct LauncherView: View {
             .padding(28)
         }
         .frame(minWidth: 560, minHeight: 520)
+        .modifier(ImmersiveCycleDriver())
         .fileImporter(isPresented: $model.filePickerPresented,
                       allowedContentTypes: [.folder],
                       allowsMultipleSelection: false) { result in
