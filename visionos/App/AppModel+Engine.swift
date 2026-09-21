@@ -25,8 +25,19 @@ extension AppModel {
     /// Starts logging into the engine log file as early as possible (compositor / host lines land in it too, the console
     /// still gets everything), and the fake engine when `-fakeEngine` was given. Called once at launch.
     func startEngineInfrastructure() {
+        // A boot marker left behind means the previous run ended the whole process during the engine boot (a fatal engine error
+        // calls _exit). Read it BEFORE logging rotates the old log away, then tell the player what the last lines said.
+        let marker = Self.engineSupportDirectory + "/engine-boot.marker"
+        let crashed = FileManager.default.fileExists(atPath: marker)
+        try? FileManager.default.removeItem(atPath: marker)
         GXEngineHost_BeginLogging(Self.engineLogFile)
         engineLogPath = Self.engineLogFile
+        if crashed {
+            let previous = Self.engineSupportDirectory + "/generals-xr-stderr-prev.log"
+            let text = (try? String(contentsOfFile: previous, encoding: .utf8)) ?? ""
+            let lines = text.split(separator: "\n").filter { !$0.hasPrefix("[GXXR]") }.suffix(6).joined(separator: "\n")
+            engineStartNotice = "The last start ended when the app closed during the engine boot. Last engine log lines:\n" + lines + "\nLog: " + previous
+        }
         if LaunchOptions.fakeEngine {
             let ok = GXXRBridgeStartFakeEngine()
             engineLog.info("fake engine start: \(ok, privacy: .public)")

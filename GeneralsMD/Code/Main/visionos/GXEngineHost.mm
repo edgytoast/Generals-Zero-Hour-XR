@@ -76,8 +76,14 @@ void SetProgress(const char* text) {
     h.progress = text ? text : "";
 }
 
-void SetFailed(const std::string& reason) {
+std::string LastErrorLine();
+
+void SetFailed(const std::string& reasonIn) {
     Host& h = H();
+    std::string reason = reasonIn;
+    [NSThread sleepForTimeInterval:0.15];  // the stderr tee thread writes the file asynchronously; let the last lines land
+    const std::string detail = LastErrorLine();
+    if (!detail.empty() && reason.find(detail) == std::string::npos) reason += " | last engine error line: " + detail;
     {
         std::lock_guard<std::mutex> lock(h.mutex);
         h.lastError = reason;
@@ -87,6 +93,26 @@ void SetFailed(const std::string& reason) {
     h.phase.store(GX_ENGINE_FAILED);
     HLOG("FAILED: %s", reason.c_str());
     os_log_error(Log(), "engine failed: %{public}s", reason.c_str());
+}
+
+// Boot marker: exists while the real engine is booting. A fatal engine error that ends the process (ReleaseCrash -> _exit) leaves it
+// behind, so the next launch can tell the player what happened (AppModel.startEngineInfrastructure reads it).
+std::string MarkerPath() {
+    Host& h = H();
+    std::lock_guard<std::mutex> lock(h.mutex);
+    return h.appSupportRoot.empty() ? std::string() : h.appSupportRoot + "/engine-boot.marker";
+}
+void WriteMarker() {
+    const std::string path = MarkerPath();
+    if (path.empty()) return;
+    if (FILE* f = fopen(path.c_str(), "w")) {
+        fprintf(f, "engine boot started\n");
+        fclose(f);
+    }
+}
+void RemoveMarker() {
+    const std::string path = MarkerPath();
+    if (!path.empty()) remove(path.c_str());
 }
 
 // ---- log tail ------------------------------------------------------------------------------------------------
@@ -125,6 +151,21 @@ std::string LastLine(const std::string& text) {
                            line.rfind("[GXXR] timing", 0) == 0 || line.rfind("[engine-host] engine:", 0) == 0;
         if (!line.empty() && !noise) return line;
         if (nl == std::string::npos) break;
+        end = nl;
+    }
+    return {};
+}
+
+// The last "ERROR" line of the log (engine INI / asset errors precede a fatal error and say what was missing).
+std::string LastErrorLine() {
+    const std::string tail = ReadTail(16 * 1024);
+    size_t end = tail.size();
+    while (end > 0) {
+        const size_t nl = tail.rfind('\n', end - 1);
+        const size_t begin = nl == std::string::npos ? 0 : nl + 1;
+        const std::string line = tail.substr(begin, end - begin);
+        if (line.find("ERROR") != std::string::npos && line.find("[GXXR") == std::string::npos) return line;
+        if (nl == std::string::npos || nl == 0) break;
         end = nl;
     }
     return {};
@@ -172,11 +213,13 @@ void EngineThread() {
     SetProgress("Booting the engine (this takes about a minute)...");
     char error[512] = {};
     HLOG("boot starting");
+    if (h.useRealEngine) WriteMarker();
     const bool booted = h.client.boot(h.client.user, &gl, [](const char* text) { SetProgress(text); }, error, sizeof(error));
     {
         std::lock_guard<std::mutex> lock(h.mutex);
         h.bootEnd = Now();
     }
+    RemoveMarker();  // reached only when the process survived the boot (graceful failure or success)
     if (!booted) {
         SetFailed(error[0] ? error : "the engine did not boot (no reason recorded; see the log)");
         if (h.client.shutdown) h.client.shutdown(h.client.user);
@@ -244,8 +287,13 @@ void EngineThread() {
             const bool keepRunning = h.client.frame(h.client.user, &frame, &output);
             if (!keepRunning) {
                 sv.abortFrame(sv.user, &frame);
-                HLOG("the engine asked to quit");
-                h.phase.store(GX_ENGINE_STOPPING);
+                HLOG("the engine stopped");
+                if (h.useRealEngine && GXEngineHostEngine_LastError()[0] != '\0') {
+                    SetFailed(std::string("the engine stopped: ") + GXEngineHostEngine_LastError());
+                } else {
+                    SetProgress("The game exited. Restart the app to play again.");
+                    h.phase.store(GX_ENGINE_STOPPING);
+                }
                 break;
             }
             sv.endFrame(sv.user, &frame, &output);

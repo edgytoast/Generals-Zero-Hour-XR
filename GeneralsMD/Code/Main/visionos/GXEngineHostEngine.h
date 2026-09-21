@@ -18,6 +18,8 @@ void GXEngineHostEngine_Shutdown(void);
 /* Effective simulation rate over the window since the last successful sample (false until minSeconds elapsed). */
 bool GXEngineHostEngine_SampleLogicRate(double minSeconds, double *logicHz, double *engineFps, bool *inGame);
 void GXEngineHostEngine_InstallLogSink(const char *path);
+/* Reason recorded by the last failed boot / frame (empty when the engine simply quit). */
+const char *GXEngineHostEngine_LastError(void);
 bool GXEngineHostEngine_IsInteractiveGame(void);
 
 #endif

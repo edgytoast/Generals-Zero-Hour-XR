@@ -38,6 +38,7 @@ void copyError(char *error, size_t capacity, const std::string &text)
 } // namespace
 
 void GXEngineHostEngine_InstallLogSink(const char *path) { XrGameBoot_InstallLogSink(path, true); }
+const char *GXEngineHostEngine_LastError(void) { return XrGameBoot_LastError(); }
 
 bool GXEngineHostEngine_Boot(const GXEngineHostConfig *config, const GXHostGLInfo *gl, char *error, size_t errorCapacity)
 {
@@ -122,10 +123,10 @@ void GXEngineHostEngine_SetPaused(bool paused)
 
 void GXEngineHostEngine_Shutdown(void)
 {
+	// No XrGameBoot_Shutdown(): the engine is single-start and the app is ended by the user; tearing down singletons that
+	// may be half broken (a fatal error, a quit in the middle of a load) would only risk a crash. Silence it instead.
 	if (!s_booted) return;
-	s_booted = false;
-	XrGameBoot_Shutdown();
-	s_driver.reset();
+	XrGameBoot_SetHostPaused(true);
 }
 
 bool GXEngineHostEngine_SampleLogicRate(double minSeconds, double *logicHz, double *engineFps, bool *inGame)

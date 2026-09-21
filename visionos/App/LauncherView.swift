@@ -140,7 +140,7 @@ private struct EngineSection: View {
                     StatusHeadline(symbol: "play.circle", tint: .secondary, title: model.isGameDataReady ? "Ready to start" : "Waiting for game data",
                                    subtitle: model.isGameDataReady ? "Start Game boots the engine in the background (about a minute). You can enter the tabletop while it boots." : "The engine needs your validated game data.")
                     if !model.engineStartNotice.isEmpty {
-                        Label(model.engineStartNotice, systemImage: "exclamationmark.triangle.fill").font(.callout).foregroundStyle(.orange)
+                        Label(model.engineStartNotice, systemImage: "exclamationmark.triangle.fill").font(.callout).foregroundStyle(.orange).textSelection(.enabled)
                     }
                     Button {
                         model.startEngine()

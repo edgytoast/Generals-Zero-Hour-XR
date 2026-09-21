@@ -329,6 +329,31 @@ void XrGameBoot_InstallLogSink(const char *path, bool tee)
 
 const char *XrGameBoot_LastError() { return s_lastError.c_str(); }
 
+// ---- fatal engine errors become exceptions (graceful failure instead of _exit) ----------------------------------
+// ReleaseCrash() / ReleaseCrashLocalized() (Core/GameEngine/Source/Common/System/Debug.cpp) end in _exit(1), which would take the
+// whole app down with the engine. With the small hook documented in docs/visionos-engine-host.md ("Graceful engine failure") they call
+// GX_XR_OnReleaseCrash() right after logging the reason. While an engine call is guarded (boot, frame) it throws XrEngineFatal, which the
+// existing catch blocks turn into a failed boot / a stopped engine with the reason in the launcher; unguarded (any other thread, or outside
+// init / frames) it returns and the original _exit path runs. The hook is inert until Debug.cpp calls it; nothing else depends on it.
+namespace {
+thread_local int t_fatalGuard = 0;
+struct XrEngineFatal : std::exception {
+	std::string reason;
+	explicit XrEngineFatal(const char *r) : reason(std::string("fatal engine error: ") + (r != nullptr ? r : "unknown")) {}
+	const char *what() const noexcept override { return reason.c_str(); }
+};
+struct FatalGuard {
+	FatalGuard() { ++t_fatalGuard; }
+	~FatalGuard() { --t_fatalGuard; }
+};
+} // namespace
+void GX_XR_OnReleaseCrash(const char *reason)
+{
+	if (t_fatalGuard > 0) {
+		throw XrEngineFatal(reason);
+	}
+}
+
 // ---- frame-rate / simulation-rate policy (docs/VISIONOS_PORT_ARCHITECTURE.md R1) ----------------
 //
 // Problem: the engine advances one 30 Hz logic step per rendered frame unless a logic time scale is
@@ -594,6 +619,9 @@ static bool xrBootTail(const XrBootTail &tail)
 	TheGameEngine = CreateGameEngine();
 	GXLOG("engine init starting (this takes ~a minute)...");
 	try {
+#if defined(GX_PLATFORM_VISIONOS)
+		FatalGuard fatalGuard;
+#endif
 		TheGameEngine->init();
 	} catch (const std::exception &e) {
 		GXLOGE("engine init threw std::exception: %s", e.what());
@@ -872,6 +900,9 @@ Bool XrGameBoot_Frame()
 		return FALSE;
 	}
 	try {
+#if defined(GX_PLATFORM_VISIONOS)
+		FatalGuard fatalGuard;
+#endif
 		d3d8gles_BeginXRFrame(GX_XR_SplitUIAllowed(),s_worldFrame.enabled && s_worldFrame.elideWorldCopy);
 		// P8 preserve non-XR detail choices outside this frame.
 		extern bool GX_XR_WorldRequested();
