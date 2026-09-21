@@ -226,17 +226,42 @@ and the compositor must keep running at display rate (the `pipeline:` line shows
 
 ## 12. Verification
 
-See the results table in section 15 (filled from the runs in this session). Nothing in this document was verified on a physical Vision Pro.
+All runs on the visionOS 26.5 **simulator** (Apple silicon host, Xcode 27.0, Debug app build, one 3840x2160 view, layout `shared`, ANGLE 2.1.28778 on
+"Apple xrOS simulator GPU", `metal-shared-event` sync, ANGLE device == compositor device). Nothing was run on a physical Vision Pro or with real game data.
+Scripts: `scripts/qa/vision-engine-host-fake-test.sh`, `vision-engine-host-fixture-test.sh`, `vision-engine-host-policy-test.cpp`,
+`vision-android-preprocess-check.sh`.
+
+| Check | Result |
+| --- | --- |
+| Fake engine, compositor vs engine (`-fakeEngine -fakeEngineBoot 6 -fakeEngineStall 4`, 71 one-second windows) | compositor median **60.0 fps** (min 60.0, max 61.0); engine median **44.9 fps** (cap 45; before deadline pacing the fake engine slept the remainder and reached only 35 fps); per display frame composite CPU 0.05-0.13 ms, total 0.08-0.19 ms; ring 1-2 of 4 slots in use; 0 skipped engine frames; 0 GL errors |
+| Stall: fake engine sleeps 4 s inside a frame every 10 s | 12 stalled windows: compositor **60.0 fps in every one**, `new frames/s=0.0 repeats/s=60.0`, frame age grew to 4.0 s, then `[fake-engine] stall over` and 44 new frames/s again. Screenshot taken during a stall: the UI panel counter is frozen while the compositor keeps running |
+| Loading indicator | while the fake engine boots (`engine(booting)`) the compositor presents the Metal indicator ("Starting fake engine", progress text) at 60 fps; screenshots read back and looked at |
+| Immersive close / re-open while the fake engine runs | `-cycleImmersive 3` and `4` (`-cycleHold 8/10`): 4 and 5 compositor loop generations; the engine thread reported `parked (pause mask 0x1)` on every close and `unparked` on every re-open; the ring was allocated **once** (`target stereoLeft` logged once, no `ring torn down`); engine and context untouched; no crash, no GL errors |
+| Soak, 349 s, fake engine with 3 s stalls (`--soak`) | first run: physical footprint 49.3 -> 66.2 MB (+2.9 MB/min): **a leak, found by this soak**: the engine thread ran one autorelease pool for its whole life, so per-frame Objective-C temporaries piled up. Fixed with a per-iteration `@autoreleasepool`. After the fix: 58.6 -> 59.3 MB over 349 s (flat, +0.7 MB, all of it in the first minute), 12,654 engine frames, compositor 60.0 fps in every sample; final soak numbers of the last build are in the report |
+| Real engine on the synthetic fixtures (`-importFrom .../fixtures/merged -importInPlace -autoStartEngine`) | the engine boots on the engine thread on visionOS: `XrGameBoot_InitHost` runs, 21 fixture archives are mounted (`[gxbig] loaded`), `TheArchiveFileSystem` initialises, `TheWritableGlobalData` starts loading `Data\INI\Default\GameData` and stops: `[INI] ERROR: No files read from directory 'Data\INI\Default\GameData'`, then `[GX-RELEASECRASH] ReleaseCrash reason='Uncaught Exception during initialization.'`. Expected: the fixtures hold fabricated archive headers, not INI data |
+| ...how it fails, without the ReleaseCrash hook (the branch as committed) | `ReleaseCrash` ends in `_exit(1)`: the process ends (no hang). The boot marker `engine-boot.marker` stays; the **next launch** shows in the Engine box: "The last start ended when the app closed during the engine boot" and the last log lines (`[INI] ERROR: ...`, `[GX-RELEASECRASH] ReleaseCrash reason=...`) plus the log path (screenshot read back) |
+| ...how it fails, with the hook applied (`scripts/qa/vision-engine-host-releasecrash-hook.patch`, uncommitted local build, then reverted) | the process stays alive; `[xr-boot] ERROR: engine init threw std::exception: fatal engine error: Uncaught Exception during initialization.`, `[engine-host] FAILED: ...`, phase FAILED; the compositor indicator (in the tabletop) shows "Engine stopped" + the reason + the log path (screenshot read back); the ring is torn down cleanly |
+| Frame policy | `vision-engine-host-policy-test.cpp` (a MODEL of the engine algorithm, not the engine): unpatched 90 Hz display -> 90 Hz logic; policy -> 30.0 Hz at 90/60/45 Hz displays (29.95 at 36); unguarded keys + lost limiter -> 90 Hz again; guarded -> 45 Hz; new match -> 30 Hz. **Not measured on the real engine** (an unpaused match needs game data); the 10 s self-check will report it |
+| Quest host tests | `scripts/qa/vision-interaction-test.sh --existing`: 27 passed, 0 failed (the same 27 as before), plus the forwarding bridge test (109 checks) and the interaction scenarios |
+| Android equivalence | section 14 |
+| Game data host test | `scripts/qa/vision-gamedata-test.sh`: 726 checks passed |
+| Builds | `build-shell.sh simulator`: 0 errors. `build-shell.sh device` (unsigned): 0 errors (engine device slice built by the script first: configure + 2 m 18 s build on a quiet machine, total 3 m 18 s including the app). Engine libs verified by `verify-engine.sh`: both slices `VISIONOSSIMULATOR` / `VISIONOS`, minos 2.0, arm64 only; the 12 `GX_XR_*` symbols are now defined by `XrGameBoot.cpp` (`nm`: `GX_XR_OffscreenBoot`, `BeginStereoWorld`, `EndStereoWorld`, `RenderCamera`, `BeginUILayer`, `WorldRequested`, `SplitUIAllowed`, `ShadowCategory`, `UpdateTerrainCoverage`, `PresentLoadingFrame`, `CullSphere`, `PointerRay`). It now reports two new undefined symbols, `XRInteraction_PollEvent` / `XRInteraction_SetBoardTransform`: they are the app's (`visionos/Input/GXXRInput.mm`), referenced by `VisionFrameDriver.h`; its expected-symbol list (a file this package does not own) needs `XRInteraction_` added |
+
+What only compiles (not run): the real engine frame path (`XrGameBoot_Frame`, `VisionFrameDriver::step`, `VisionPresentation::update`, host targets, the world/UI layers of a real game),
+the pause path on the real engine (`XrGameBoot_SetHostPaused`), the frame policy guard and the logic-rate self-check, `GXEngineHost_Post`, two-view stereo, the atlas
+option with the real engine, the device slice at run time.
 
 ## 13. Known limits
 
 * **Presentation is minimal.** `VisionPresentation::update()` shows the stereo world when the engine reports an interactive skirmish / campaign, the engine UI
   texture on one tilted panel, and the composed frame on one upright panel otherwise. The layout persistence, workspace arrangement, Commands console, result
   card, Ground View veil, UI crop and world/UI split logic of the Quest host are package C2's job and replace the body of `update()`.
-* **Engine crashes end the process.** `ReleaseCrash` (`Debug.cpp`) ends with `_exit(1)`; a `RELEASE_CRASH` during engine init or a frame therefore terminates the app
-  (the reason is in the log: `[GX-RELEASECRASH]`). Exceptions thrown out of `init()` and the frame are caught and reported gracefully. A hook in
-  `ReleaseCrash` / `ReleaseCrashLocalized` under `GX_XR_HOST` (call a host function that unwinds to the boot / frame `catch`) would make these graceful too;
-  that file is not owned by this package (see the report).
+* **Engine crashes end the process unless the ReleaseCrash hook is applied.** `ReleaseCrash` (`Core/GameEngine/Source/Common/System/Debug.cpp`) ends with `_exit(1)`; a
+  `RELEASE_CRASH` during engine init or a frame therefore terminates the app (the reason is in the log: `[GX-RELEASECRASH]`, and the next launch tells the player, see
+  section 12). Exceptions thrown out of `init()` and the frame are caught and reported gracefully. `XrGameBoot.cpp` already defines the host half of the hook,
+  `GX_XR_OnReleaseCrash(reason)` (throws inside a guarded boot / frame, returns otherwise); the engine half is a 12-line change to `Debug.cpp` under
+  `GX_PLATFORM_VISIONOS` (`scripts/qa/vision-engine-host-releasecrash-hook.patch`; Android is untouched). This package does not own that file, so the patch is delivered as a patch,
+  not committed. Applied to the engine build it was tested (section 12): the boot failure becomes a `FAILED` phase and the app keeps running.
 * Loading screens: the engine's own loading frames are drawn inside the blocked engine frame; the compositor keeps showing the last published frame during a load
   (no progress from the engine during a map load).
 * The engine is single-start per process; a quit ends the engine (phase `STOPPING`); restart the app.
