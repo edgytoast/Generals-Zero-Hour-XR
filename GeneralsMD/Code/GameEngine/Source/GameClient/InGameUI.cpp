@@ -1554,6 +1554,7 @@ void InGameUI::setRadiusCursor(RadiusCursorType cursorType, const SpecialPowerTe
 //-------------------------------------------------------------------------------------------------
 void InGameUI::handleRadiusCursor()
 {
+// GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT): touch-aim path -- gaze+pinch, like a finger or the Quest ray, has no live mouse position; the XR host feeds setTouchAimPoint().
 #if defined(__ANDROID__) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
 	// GeneralsX @bugfix Android port 06/09/2026 Reported: the ability circle appears for a
 	// moment when the finger lands and is then gone for the rest of the drag, leaving the
@@ -1598,6 +1599,7 @@ void InGameUI::handleRadiusCursor()
 			// happened to leave it, which is how the ability radius ended up drawn on the
 			// button that armed it, and on the previous attempt's target after re-arming.
 			const ICoord2D *aimPixel = &mouseIO->pos;
+// GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT): touch-aim path -- gaze+pinch, like a finger or the Quest ray, has no live mouse position; the XR host feeds setTouchAimPoint().
 #if defined(__ANDROID__) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
 			if( !m_touchAimKnown )
 			{
@@ -2017,6 +2019,7 @@ void InGameUI::handleBuildPlacements()
 		}
 		else
 		{
+// GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT): touch-aim path -- gaze+pinch, like a finger or the Quest ray, has no live mouse position; the XR host feeds setTouchAimPoint().
 #if defined(__ANDROID__) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
 			// GeneralsX @bugfix Android port 06/09/2026 Reported: picking a structure at a
 			// dozer immediately drew its silhouette in the middle of the screen, which means
@@ -2186,6 +2189,7 @@ void InGameUI::preDraw()
 	// handle any "icons" for the act of building things and placing them in the world
 	handleBuildPlacements();
 
+// GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT): touch-aim path -- gaze+pinch, like a finger or the Quest ray, has no live mouse position; the XR host feeds setTouchAimPoint().
 #if defined(__ANDROID__) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
 	// GeneralsX @bugfix Android port 08/09/2026 Age the attack-move guard hint here.
 	// On the mouse path createCommandHint() ticks it, but that runs off mouseover hints,
@@ -3601,6 +3605,7 @@ void InGameUI::setGUICommand( const CommandButton *command )
 		// the mouseoverhint code will take care of the cursor context, once the mouse leaves the panel
 		// but we will set the radius cursor here, so you can see it bleeding out from beneath the panel
 
+// GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT): touch-aim path -- gaze+pinch, like a finger or the Quest ray, has no live mouse position; the XR host feeds setTouchAimPoint().
 #if defined(__ANDROID__) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
 		// ...except on a touchscreen, where "bleeding out from beneath the panel" is not
 		// what happens: with no live pointer the decal appears at the stale cursor point,
@@ -4210,6 +4215,7 @@ void InGameUI::postWindowDraw()
 //-------------------------------------------------------------------------------------------------
 void InGameUI::postDraw()
 {
+// GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT): touch-aim path -- gaze+pinch, like a finger or the Quest ray, has no live mouse position; the XR host feeds setTouchAimPoint().
 #if defined(__ANDROID__) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
 	// GeneralsX @feature Android port 09/09/2026 The pending command's own icon, under the
 	// finger. Drawn here rather than as part of the world so it is never occluded and never
@@ -4608,6 +4614,7 @@ void InGameUI::postDraw()
 		}
 	}
 
+// GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT): touch-aim path -- gaze+pinch, like a finger or the Quest ray, has no live mouse position; the XR host feeds setTouchAimPoint().
 #if defined(__ANDROID__) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
 	// GeneralsX @feature Android port 06/09/2026 Draw the targeting reticle a touchscreen
 	// has no cursor to carry.
@@ -4661,6 +4668,7 @@ void InGameUI::postDraw()
 	}
 #endif
 
+// GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT): touch-aim path -- gaze+pinch, like a finger or the Quest ray, has no live mouse position; the XR host feeds setTouchAimPoint().
 #if defined(__ANDROID__) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
 	// GeneralsX @feature Android port 06/09/2026 Touch-input debug overlay, off unless
 	// the tester turns it on in the launcher's Diagnostics section.

@@ -29,6 +29,8 @@
 
 // GeneralsX @bugfix BenderAI 13/02/2026 Fix include path (fighter19 pattern)
 #include "SDL3Device/GameClient/SDL3Mouse.h"
+// GeneralsX @feature visionOS port: GX_XR_HOST / GX_USES_D3D8GLES replace the bare __ANDROID__ tests below.
+#include "gx_backend.h"
 #include <cstdio>
 #include <cstring>
 
@@ -528,6 +530,7 @@ void SDL3Mouse::regainFocus()
 	// Capture may be re-enabled by game logic
 }
 
+// GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT): message-stream ownership stays with the XR host on this platform (createStreamMessages below enables the normal stream for XR hosts).
 #if (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE) || defined(__ANDROID__)
 
 // GeneralsX @bugfix Android port 06/09/2026 See the declaration comment: this
@@ -550,7 +553,7 @@ void SDL3Mouse::setTouchCursorPos(Int x, Int y)
  */
 void SDL3Mouse::createStreamMessages()
 {
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 	// GeneralsX @feature Codex 13/09/2026 OpenXR supplies a persistent ray
 	// pointer with hover and paired releases. Enable its normal mouse stream;
 	// the touch-only Android path keeps its existing dispatch policy.

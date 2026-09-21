@@ -28,6 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include "Lib/BaseType.h"
+// GeneralsX @feature visionOS port: GX_XR_HOST / GX_USES_D3D8GLES replace the bare __ANDROID__ tests below.
+#include "gx_backend.h"
 #include "always.h"
 #include "W3DDevice/GameClient/W3DSmudge.h"
 #include "W3DDevice/GameClient/W3DShaderManager.h"
@@ -41,7 +43,7 @@
 #include "WW3D2/camera.h"
 #include "WW3D2/sortingrenderer.h"
 #include <cstdio>
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 // GeneralsX @perf Android port 09/05/2026 Forward-declared rather than pulling
 // in "d3d8gles.h": that header lives in the d3d8gles target's include dir,
 // which this target (gameenginedevice) does not carry, and widening the
@@ -83,7 +85,7 @@ SmudgeManager *TheSmudgeManager=nullptr;
 // readback), and non-Android builds are untouched.
 static inline bool GeneralsX_SmudgeUsableOnThisBackend()
 {
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 	return d3d8gles_ShouldUseVulkanBackend();
 #else
 	return true;

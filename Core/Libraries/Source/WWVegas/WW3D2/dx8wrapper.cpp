@@ -51,10 +51,12 @@
 #endif
 
 #include "dx8wrapper.h"
+// GeneralsX @feature visionOS port: GX_XR_HOST / GX_USES_D3D8GLES replace the bare __ANDROID__ tests below.
+#include "gx_backend.h"
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
 #endif
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 // GeneralsX @build Android port GLES experiment - declares Direct3DCreate8_GLES
 #include "d3d8gles.h"
 #endif
@@ -395,7 +397,7 @@ void DX8Wrapper::Pillarbox_End()
 	// window space and texture storage are both top-origin there, matching
 	// D3D already -- which is exactly why the same unmodified quad code has
 	// never shown this on DXVK.
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 	const bool flipForGLTextureStorage = !d3d8gles_ShouldUseVulkanBackend();
 #else
 	const bool flipForGLTextureStorage = false;
@@ -747,7 +749,7 @@ bool DX8Wrapper::Init(void * hwnd, bool lite)
 		// GeneralsX @build BenderAI 10/02/2026 - Platform-specific DLL/SO/DYLIB loading (Phase 5: macOS)
 #ifdef _WIN32
 		D3D8Lib = LoadLibrary("D3D8.DLL");
-#elif defined(__ANDROID__)
+#elif defined(GX_USES_D3D8GLES)
 		// GeneralsX @build Android port render-backend picker 07/09/2026 -
 		// runtime backend switch (see d3d8gles_ShouldUseVulkanBackend() in
 		// d3d8gles.h/d3d8gles.cpp for the single source of truth this and
@@ -785,6 +787,7 @@ bool DX8Wrapper::Init(void * hwnd, bool lite)
 		// iOS confines dlopen to the app bundle; bare names don't resolve there, so
 		// load from the embedded Frameworks directory explicitly. macOS keeps the
 		// bare name (resolved via DYLD_LIBRARY_PATH set by run.sh).
+		// GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT for iOS): unreachable on visionOS -- the GX_USES_D3D8GLES branch above selects the static Direct3DCreate8_GLES before this DXVK dlopen path.
 		#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
 		D3D8Lib = LoadLibrary("@executable_path/Frameworks/libdxvk_d3d8.0.dylib");
 		#else
@@ -811,7 +814,7 @@ bool DX8Wrapper::Init(void * hwnd, bool lite)
 		// D3D8Lib null (nothing was dlopen'd), which the generic checks below
 		// would misread as a load failure. Every other platform still needs
 		// this shared dlopen-style resolution.
-#if !defined(__ANDROID__)
+#if !defined(GX_USES_D3D8GLES)
 		if (D3D8Lib == nullptr) {
 			fprintf(stderr, "ERROR: DX8Wrapper::Init() - Failed to load D3D8 library\n");
 			return false;	// Return false at this point if init failed
@@ -1432,7 +1435,7 @@ void DX8Wrapper::Get_Format_Name(unsigned int format, StringClass *tex_format)
 
 void DX8Wrapper::Resize_And_Position_Window()
 {
-#if defined(__ANDROID__)
+#if defined(GX_XR_HOST)
 	// GeneralsX @bugfix Android port 08/31/2026 On Android the "window" IS
 	// the screen -- there is no OS-level concept of resizing/repositioning
 	// it to something smaller than the display, the way a desktop window

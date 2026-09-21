@@ -37,6 +37,8 @@
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
 #include "GameClient/InGameUI.h"
+// GeneralsX @feature visionOS port: GX_XR_HOST / GX_USES_D3D8GLES replace the bare __ANDROID__ tests below.
+#include "gx_backend.h"
 #include "GameClient/View.h"
 #include "W3DDevice/GameClient/W3DView.h"
 #include "WW3D2/render2d.h"
@@ -65,7 +67,7 @@ public:
 	//-----------------------------------------------------------------------------------------------
 
 	virtual void draw() override; ///< Render the in-game user interface
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 	// GeneralsX @feature Codex 14/09/2026 Rotate only the native preview;
 	// the original placement translator validates and commits its angle.
 	bool rotateXrPlacement(float radians);
@@ -94,7 +96,7 @@ protected:
 	HAnimClass		 *m_moveHintAnim[ MAX_MOVE_HINTS ];
 	RenderObjClass *m_buildingPlacementAnchor;
 	RenderObjClass *m_buildingPlacementArrow;
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 	Line3DClass *m_xrAttackRing[16]={};
 	Coord3D m_xrAttackPosition={};
 	Int m_xrAttackFrame=-1000;

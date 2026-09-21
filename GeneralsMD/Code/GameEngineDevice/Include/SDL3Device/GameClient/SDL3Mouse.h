@@ -64,6 +64,7 @@ public:
 	virtual void loseFocus();
 	virtual void regainFocus();
 
+// GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT): same as the .cpp -- the touch-first mouse overrides are the base the XR host builds on.
 #if (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE) || defined(__ANDROID__)
 	// GeneralsX @feature Android port 01/08/2026 On touch-first platforms there
 	// is no real mouse hardware, and SDL3GameEngine.cpp's touch handler drives
