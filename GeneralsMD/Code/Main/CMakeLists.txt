@@ -258,22 +258,10 @@ if(SAGE_BUILD_VISIONOS_LIB)
     if(_visionos_sources)
         target_sources(z_generals PRIVATE ${_visionos_sources})
     endif()
-    # Objective-C++ needs its own language enabled; do it only when a .mm file is
-    # actually present, so a plain C++ engine archive does not pay for the extra
-    # compiler probe. (A .mm added later triggers a re-configure through the glob.)
-    set(_visionos_has_mm FALSE)
-    foreach(_src IN LISTS _visionos_sources)
-        if(_src MATCHES "\\.mm$")
-            set(_visionos_has_mm TRUE)
-        endif()
-    endforeach()
-    if(_visionos_has_mm)
-        enable_language(OBJCXX)
-        set(CMAKE_OBJCXX_STANDARD 20)
-        set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
-        # ARC for the bridge; the C++ engine sources are not Objective-C and unaffected.
-        target_compile_options(z_generals PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
-    endif()
+    # Objective-C++ (.mm) needs the OBJCXX language, enabled at the top level in
+    # cmake/platform.cmake. Compile the bridge with ARC; the C++ engine sources are not
+    # Objective-C and are unaffected.
+    target_compile_options(z_generals PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
 
     # SDL's main-callback helper (src/main/ios/SDL_sysmain_callbacks.m) uses CADisplayLink,
     # which lives in QuartzCore; SDL3's own CMake does not declare that framework. It is

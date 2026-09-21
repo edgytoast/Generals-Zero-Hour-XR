@@ -68,3 +68,12 @@ option(SAGE_BUILD_VISIONOS_LIB
 if(SAGE_BUILD_VISIONOS_LIB AND NOT GX_PLATFORM_VISIONOS)
     message(FATAL_ERROR "SAGE_BUILD_VISIONOS_LIB requires CMAKE_SYSTEM_NAME=visionOS (use the visionos-simulator or visionos-device preset).")
 endif()
+
+if(SAGE_BUILD_VISIONOS_LIB)
+    # The host boundary (GeneralsMD/Code/Main/visionos/*.mm) is Objective-C++. The language
+    # has to be enabled here, at the top level: enabling it later from the Main subdirectory,
+    # after targets exist, makes CMake fail with "CMAKE_OBJCXX_COMPILE_OBJECT not set".
+    enable_language(OBJCXX)
+    set(CMAKE_OBJCXX_STANDARD 20)
+    set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
+endif()
