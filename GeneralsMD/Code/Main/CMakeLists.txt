@@ -257,23 +257,25 @@ if(SAGE_BUILD_VISIONOS_LIB)
         "${CMAKE_CURRENT_SOURCE_DIR}/visionos/*.mm")
     if(_visionos_sources)
         target_sources(z_generals PRIVATE ${_visionos_sources})
-    endif()
-    # Objective-C++ needs its own language enabled; do it only when a .mm file is
-    # actually present, so a plain C++ engine archive does not pay for the extra
-    # compiler probe. (A .mm added later triggers a re-configure through the glob.)
-    set(_visionos_has_mm FALSE)
-    foreach(_src IN LISTS _visionos_sources)
-        if(_src MATCHES "\\.mm$")
-            set(_visionos_has_mm TRUE)
+        # The pure Quest headers (XrMath.h, XrTactics.h, ...) that VisionInteraction.cpp reuses
+        # include <openxr/openxr.h>; visionOS has no OpenXR, so visionos/xr_shim/ provides a POD
+        # stand-in (docs/visionos-interaction.md). Scoped to the visionos/ sources only, so it can
+        # never shadow the real OpenXR SDK for any other target. XRBoardBounds.h (XrWorld.h)
+        # comes from the d3d8gles include directory.
+        set(_visionos_extra_includes "${CMAKE_CURRENT_SOURCE_DIR}/visionos/xr_shim")
+        if(TARGET d3d8gles)
+            get_target_property(_d3d8gles_inc d3d8gles INTERFACE_INCLUDE_DIRECTORIES)
+            if(_d3d8gles_inc)
+                list(APPEND _visionos_extra_includes ${_d3d8gles_inc})
+            endif()
         endif()
-    endforeach()
-    if(_visionos_has_mm)
-        enable_language(OBJCXX)
-        set(CMAKE_OBJCXX_STANDARD 20)
-        set(CMAKE_OBJCXX_STANDARD_REQUIRED ON)
-        # ARC for the bridge; the C++ engine sources are not Objective-C and unaffected.
-        target_compile_options(z_generals PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+        set_source_files_properties(${_visionos_sources} PROPERTIES
+            INCLUDE_DIRECTORIES "${_visionos_extra_includes}")
     endif()
+    # Objective-C++ (.mm) needs the OBJCXX language, enabled at the top level in
+    # cmake/platform.cmake. Compile the bridge with ARC; the C++ engine sources are not
+    # Objective-C and are unaffected.
+    target_compile_options(z_generals PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
 
     # SDL's main-callback helper (src/main/ios/SDL_sysmain_callbacks.m) uses CADisplayLink,
     # which lives in QuartzCore; SDL3's own CMake does not declare that framework. It is

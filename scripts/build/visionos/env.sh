@@ -24,14 +24,22 @@
 #   GX_JOBS               Parallel build jobs (default 4: the machine is often shared).
 #
 # The script exits non-zero when it is executed instead of sourced, and returns non-zero
-# from `source` when a prerequisite is missing.
+# from `source` when a prerequisite is missing. It works from bash and zsh.
 
-if [[ "${BASH_SOURCE[0]:-$0}" == "$0" ]]; then
-  echo "env.sh must be sourced: source ${0}" >&2
+# Works when sourced from bash or zsh (the default macOS login shell).
+_gx_env_file="${BASH_SOURCE[0]:-$0}"
+_gx_sourced=0
+if [ -n "${BASH_VERSION:-}" ]; then
+  [ "${BASH_SOURCE[0]}" != "$0" ] && _gx_sourced=1
+elif [ -n "${ZSH_VERSION:-}" ]; then
+  case "${ZSH_EVAL_CONTEXT:-}" in *:file*) _gx_sourced=1 ;; esac
+fi
+if [ "$_gx_sourced" != 1 ]; then
+  echo "env.sh must be sourced: source ${_gx_env_file}" >&2
   exit 2
 fi
 
-_gx_env_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_gx_env_dir="$(cd "$(dirname "$_gx_env_file")" && pwd)"
 GX_REPO_ROOT="$(cd "$_gx_env_dir/../../.." && pwd)"
 export GX_REPO_ROOT
 
@@ -99,7 +107,7 @@ if [[ ! -d "$GX_ANGLE_INSTALL" ]]; then
 fi
 
 unset -f _gx_need
-unset _gx_env_dir _gx_sdk _gx_cmake_ver _gx_major _gx_rest _gx_minor
+unset _gx_env_dir _gx_env_file _gx_sourced _gx_sdk _gx_cmake_ver _gx_major _gx_rest _gx_minor
 if (( _gx_fail )); then unset _gx_fail; return 1; fi
 unset _gx_fail
 return 0

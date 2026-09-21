@@ -38,10 +38,16 @@ Nothing in this directory is needed to link the engine itself. The library conta
 
 ## Symbols the library expects from other packages
 
-`scripts/build/visionos/verify-engine.sh` prints the exact list; the expected ones are
-the D3D8 backend (`Direct3DCreate8_GLES` and the `d3d8gles_*` functions from
-`Core/Libraries/Source/d3d8gles`), the `GX_XR_*` / `XrGameBoot_*` hooks that the shared
-engine code calls behind `GX_XR_HOST`, and the ANGLE `egl*` / `gl*` entry points.
+`scripts/build/visionos/verify-engine.sh` prints the exact list. Today it is the 12 `GX_XR_*` hooks that the shared
+engine code calls behind `GX_XR_HOST`: `bool GX_XR_OffscreenBoot` (`extern "C"`) and the C++ functions
+`GX_XR_BeginStereoWorld`, `GX_XR_EndStereoWorld`, `GX_XR_RenderCamera`, `GX_XR_BeginUILayer`,
+`GX_XR_WorldRequested`, `GX_XR_SplitUIAllowed`, `GX_XR_ShadowCategory`, `GX_XR_UpdateTerrainCoverage`,
+`GX_XR_PresentLoadingFrame`, `GX_XR_CullSphere`, `GX_XR_PointerRay`. The D3D8 backend (`Direct3DCreate8_GLES`,
+`d3d8gles_*`) is part of the archive; ANGLE's `egl*` / `gl*` are resolved at run time through the resolver
+the host hands the backend.
+
+`VisionInteraction.cpp` is compiled with `visionos/xr_shim` (a stand-in for `<openxr/openxr.h>`) and the d3d8gles
+include directory on its include path; CMake scopes both to the sources of this directory.
 
 ## Build outputs and ANGLE
 
