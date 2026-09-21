@@ -257,6 +257,20 @@ if(SAGE_BUILD_VISIONOS_LIB)
         "${CMAKE_CURRENT_SOURCE_DIR}/visionos/*.mm")
     if(_visionos_sources)
         target_sources(z_generals PRIVATE ${_visionos_sources})
+        # The pure Quest headers (XrMath.h, XrTactics.h, ...) that VisionInteraction.cpp reuses
+        # include <openxr/openxr.h>; visionOS has no OpenXR, so visionos/xr_shim/ provides a POD
+        # stand-in (docs/visionos-interaction.md). Scoped to the visionos/ sources only, so it can
+        # never shadow the real OpenXR SDK for any other target. XRBoardBounds.h (XrWorld.h)
+        # comes from the d3d8gles include directory.
+        set(_visionos_extra_includes "${CMAKE_CURRENT_SOURCE_DIR}/visionos/xr_shim")
+        if(TARGET d3d8gles)
+            get_target_property(_d3d8gles_inc d3d8gles INTERFACE_INCLUDE_DIRECTORIES)
+            if(_d3d8gles_inc)
+                list(APPEND _visionos_extra_includes ${_d3d8gles_inc})
+            endif()
+        endif()
+        set_source_files_properties(${_visionos_sources} PROPERTIES
+            INCLUDE_DIRECTORIES "${_visionos_extra_includes}")
     endif()
     # Objective-C++ (.mm) needs the OBJCXX language, enabled at the top level in
     # cmake/platform.cmake. Compile the bridge with ARC; the C++ engine sources are not
