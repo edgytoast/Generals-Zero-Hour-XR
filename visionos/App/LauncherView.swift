@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct LauncherView: View {
     @Environment(AppModel.self) private var model
@@ -8,71 +9,73 @@ struct LauncherView: View {
 
     var body: some View {
         @Bindable var model = model
-        VStack(alignment: .leading, spacing: 20) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Generals: Zero Hour XR")
-                    .font(.extraLargeTitle2)
-                Text("Apple Vision Pro tabletop shell (renderer validation build)")
-                    .font(.title3)
-                    .foregroundStyle(.secondary)
-            }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Generals: Zero Hour XR")
+                        .font(.extraLargeTitle2)
+                    Text("Apple Vision Pro tabletop")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                }
 
-            GroupBox("Status") {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(model.statusText).font(.headline)
-                    if model.spaceState == .open {
-                        Text("Frames: \(model.frames)  |  \(model.formats)  |  board placed: \(model.placed ? "yes" : "no")")
-                            .font(.callout).foregroundStyle(.secondary)
+                GameDataSection()
+
+                GroupBox("Tabletop") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(model.statusText).font(.headline)
+                        if model.spaceState == .open {
+                            Text("Frames: \(model.frames)  |  \(model.formats)  |  board placed: \(model.placed ? "yes" : "no")")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                        if !model.lastMessage.isEmpty {
+                            Text(model.lastMessage).font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Text(model.inputSummary).font(.footnote).foregroundStyle(.secondary)
                     }
-                    if !model.lastMessage.isEmpty {
-                        Text(model.lastMessage).font(.footnote).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                HStack(spacing: 16) {
+                    Button {
+                        Task { await enter() }
+                    } label: {
+                        Label(model.isGameDataReady ? "Enter Tabletop" : "Enter Tabletop (test scene)", systemImage: "cube.transparent")
                     }
-                    Text(model.inputSummary).font(.footnote).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
+                    .disabled(model.spaceState != .closed || !model.canEnterTabletop)
 
-            HStack(spacing: 16) {
-                Button {
-                    Task { await enter() }
-                } label: {
-                    Label("Enter Tabletop", systemImage: "cube.transparent")
-                }
-                .disabled(model.spaceState != .closed)
+                    Button {
+                        Task { await leave() }
+                    } label: {
+                        Label("Leave Tabletop", systemImage: "xmark.circle")
+                    }
+                    .disabled(model.spaceState != .open)
 
-                Button {
-                    Task { await leave() }
-                } label: {
-                    Label("Leave Tabletop", systemImage: "xmark.circle")
+                    Button {
+                        GXXRBridgeRecenter()
+                    } label: {
+                        Label("Recenter", systemImage: "scope")
+                    }
+                    .disabled(model.spaceState != .open)
                 }
-                .disabled(model.spaceState != .open)
-
-                Button {
-                    GXXRBridgeRecenter()
-                } label: {
-                    Label("Recenter", systemImage: "scope")
-                }
-                .disabled(model.spaceState != .open)
-            }
-
-            GroupBox("Game data") {
-                VStack(alignment: .leading, spacing: 6) {
-                    // Placeholder for the future data-setup UI (folder picker / importer / validator).
-                    Text(model.gameDataPresent ? "Game data folder has content." : "No game data yet. Data setup arrives in a later build.")
-                        .font(.callout)
-                    Text(model.gameDataPath).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
-                    Text("Copy your own legally owned Generals / Zero Hour files to this folder with the Files app. No game data ships with this app.")
+                if !model.canEnterTabletop {
+                    Text("Enter Tabletop unlocks when your game data is ready.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
 
-            Toggle("Test engine hand-off path (offscreen per-eye textures)", isOn: $model.useFakeEngineTextures)
-                .disabled(model.spaceState != .closed)
+                Toggle("Test engine hand-off path (offscreen per-eye textures)", isOn: $model.useFakeEngineTextures)
+                    .disabled(model.spaceState != .closed)
+            }
+            .padding(28)
         }
-        .padding(28)
         .frame(minWidth: 560, minHeight: 520)
+        .fileImporter(isPresented: $model.filePickerPresented,
+                      allowedContentTypes: [.folder],
+                      allowsMultipleSelection: false) { result in
+            model.handlePickerResult(result)
+        }
         .task {
+            await model.startGameData()
             if LaunchOptions.autoImmersive { await enter() }
             while !Task.isCancelled {
                 model.refresh()
@@ -82,7 +85,9 @@ struct LauncherView: View {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .background: GXXRBridgeNotifyLifecycle(Int32(PLATFORM_LIFECYCLE_SUSPEND.rawValue))
-            case .active: GXXRBridgeNotifyLifecycle(Int32(PLATFORM_LIFECYCLE_RESUME.rawValue))
+            case .active:
+                GXXRBridgeNotifyLifecycle(Int32(PLATFORM_LIFECYCLE_RESUME.rawValue))
+                Task { await model.gameDataBecameActive() }
             default: break
             }
         }
@@ -109,5 +114,341 @@ struct LauncherView: View {
         model.spaceState = .closing
         await dismissImmersiveSpace()
         model.spaceState = .closed
+    }
+}
+
+// MARK: - Game data section
+
+/// Status, folder picker, import progress, validation results and the "where do I get the
+/// files" help. Everything is driven by `AppModel.gameData`.
+private struct GameDataSection: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        GroupBox("Game data") {
+            VStack(alignment: .leading, spacing: 12) {
+                if let notice = model.gameDataNotice {
+                    Label(notice, systemImage: model.gameDataNoticeIsError ? "exclamationmark.triangle.fill" : "info.circle.fill")
+                        .font(.callout)
+                        .foregroundStyle(model.gameDataNoticeIsError ? Color.orange : Color.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                switch model.gameData {
+                case .notConfigured: NotConfiguredView()
+                case .validating: ValidatingView()
+                case .importing(let progress): ImportingView(progress: progress)
+                case .ready(let paths): ReadyView(paths: paths)
+                case .invalid(let report): InvalidView(report: report)
+                }
+
+                if let rejected = model.rejectedSelection {
+                    Divider()
+                    Label("The folder you just chose was not used. Your working game data is unchanged.", systemImage: "arrow.uturn.backward.circle")
+                        .font(.callout).foregroundStyle(.secondary)
+                    InvalidView(report: rejected)
+                }
+
+                if let interrupted = model.interruptedImport, !model.isGameDataBusy {
+                    InterruptedView(interrupted: interrupted)
+                }
+
+                if !model.isGameDataBusy { PickerControls() }
+
+                WhereToGetFiles()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .confirmationDialog("Remove the imported game data?", isPresented: $model.confirmRemoveImported, titleVisibility: .visible) {
+            Button("Remove imported data", role: .destructive) { model.removeImportedData() }
+            Button("Keep it", role: .cancel) {}
+        } message: {
+            Text("This deletes only the copy stored inside this app. Your original files are not touched.")
+        }
+    }
+}
+
+private struct StatusHeadline: View {
+    let symbol: String
+    let tint: Color
+    let title: String
+    let subtitle: String?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbol).font(.title2).foregroundStyle(tint)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.headline)
+                if let subtitle { Text(subtitle).font(.callout).foregroundStyle(.secondary) }
+            }
+        }
+    }
+}
+
+private struct NotConfiguredView: View {
+    var body: some View {
+        StatusHeadline(symbol: "folder.badge.questionmark", tint: .secondary, title: "Not configured",
+                       subtitle: "Choose the folder with your own Generals and Zero Hour files. The app copies them once into its private storage. About 2.7 GB of free space is needed.")
+    }
+}
+
+private struct ValidatingView: View {
+    @Environment(AppModel.self) private var model
+    var body: some View {
+        HStack(spacing: 12) {
+            ProgressView()
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Checking files...").font(.headline)
+                if !model.validationSubject.isEmpty {
+                    Text(model.validationSubject).font(.callout).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+private struct ImportingView: View {
+    @Environment(AppModel.self) private var model
+    let progress: ImportProgress
+
+    private var phaseTitle: String {
+        switch progress.phase {
+        case .planning: return "Reading the folder..."
+        case .checkingSpace: return "Checking free storage..."
+        case .copying: return "Copying game data"
+        case .verifying: return "Verifying the copy..."
+        case .committing: return "Finishing..."
+        case .cleaning, .done: return "Cleaning up..."
+        }
+    }
+
+    private func bytes(_ v: UInt64) -> String { ByteCountFormatter.string(fromByteCount: Int64(v), countStyle: .file) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(progress.cancelRequested ? "Stopping..." : phaseTitle).font(.headline)
+            ProgressView(value: progress.fraction)
+                .progressViewStyle(.linear)
+            HStack {
+                Text("\(bytes(progress.bytesDone)) of \(bytes(progress.bytesTotal))  (\(Int(progress.fraction * 100)) %)")
+                Spacer()
+                if progress.bytesPerSecond > 1_000_000 {
+                    Text("\(bytes(UInt64(progress.bytesPerSecond)))/s")
+                }
+            }
+            .font(.callout).foregroundStyle(.secondary)
+            Text("File \(progress.filesDone) of \(progress.filesTotal)" + (progress.currentFile.isEmpty ? "" : "  |  \(progress.currentFile)"))
+                .font(.footnote.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            if progress.bytesReused > 0 {
+                Text("Resumed: \(bytes(progress.bytesReused)) from the earlier attempt was reused.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Button(role: .cancel) { model.cancelImport() } label: {
+                Label("Cancel import", systemImage: "xmark.circle")
+            }
+            .disabled(progress.cancelRequested)
+            Text("You can cancel safely. Files already copied are kept so the import can continue later.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct ReadyView: View {
+    @Environment(AppModel.self) private var model
+    let paths: GameDataPaths
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            StatusHeadline(symbol: "checkmark.seal.fill", tint: .green, title: "Ready",
+                           subtitle: paths.isComplete ? "Complete game data found." : "Minimal game data found (the game is playable).")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(paths.source.title).font(.callout)
+                Text("Zero Hour: \(paths.zhRoot)").font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                if !paths.baseMerged {
+                    Text("Generals:  \(paths.baseRoot)").font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+                Text(details).font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(paths.optionalNotes, id: \.self) { note in
+                Label(note, systemImage: "info.circle").font(.footnote).foregroundStyle(.secondary)
+            }
+            if paths.source == .imported {
+                Button(role: .destructive) { model.confirmRemoveImported = true } label: {
+                    Label("Remove imported data", systemImage: "trash")
+                }
+            }
+        }
+    }
+
+    private var details: String {
+        var parts: [String] = []
+        if paths.bytes > 0 { parts.append(ByteCountFormatter.string(fromByteCount: Int64(paths.bytes), countStyle: .file)) }
+        if !paths.languages.isEmpty { parts.append("Language: " + paths.languages.joined(separator: ", ")) }
+        return parts.joined(separator: "  |  ")
+    }
+}
+
+private struct InvalidView: View {
+    @Environment(AppModel.self) private var model
+    let report: GXGDReport
+
+    private var headline: String {
+        switch report.verdict {
+        case .noSelection: return "No folder chosen"
+        case .unreadable: return "This folder cannot be read"
+        case .installerOnly: return "This is an installer, not installed game data"
+        case .noZeroHour: return "No Zero Hour data found here"
+        case .ambiguous: return "More than one Zero Hour install found"
+        case .incomplete: return "Some required files are missing"
+        case .ready: return "Ready"
+        @unknown default: return "Cannot use this folder"
+        }
+    }
+
+    private var explanation: String? {
+        switch report.verdict {
+        case .unreadable: return "The folder could not be listed. Check that it is still available, then choose it again."
+        case .installerOnly: return "An .iso, .cab, .msi or setup.exe was found. Install or fully extract Generals and Zero Hour on a computer first, then choose the installed folder."
+        case .noZeroHour: return "Choose the Zero Hour folder (the one containing INIZH.big) or its parent folder. Folders up to two levels deeper are searched."
+        case .ambiguous: return "Choose the one install you want to use:"
+        default: return nil
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            StatusHeadline(symbol: "exclamationmark.triangle.fill", tint: .orange, title: headline, subtitle: explanation)
+
+            if report.verdict == .ambiguous {
+                ForEach(report.zhChoices, id: \.self) { choice in
+                    Text(choice).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                }
+            }
+
+            if report.verdict == .incomplete {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Zero Hour: \(report.zhRoot)").font(.caption.monospaced()).foregroundStyle(.secondary)
+                    Text("Generals:  \(report.baseFolderMissing ? "not found" : report.baseRoot)")
+                        .font(.caption.monospaced()).foregroundStyle(.secondary)
+                }
+                if report.baseFolderMissing {
+                    Text("The base Generals folder (the one containing Terrain.big) was not found next to or inside the Zero Hour folder. Choose the parent folder that holds both games, or choose the Generals folder separately.")
+                        .font(.callout)
+                }
+                let zh = report.missing.filter { !$0.isBaseGenerals }
+                let base = report.baseFolderMissing ? [] : report.missing.filter { $0.isBaseGenerals }
+                if !zh.isEmpty { MissingList(title: "Missing Zero Hour files", items: zh) }
+                if !base.isEmpty { MissingList(title: "Missing Generals files", items: base) }
+                if !report.damaged.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Damaged or incomplete files (copy them again)").font(.subheadline.bold())
+                        ForEach(report.damaged, id: \.self) { d in
+                            Text(d).font(.caption.monospaced()).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                if !report.weatherFound {
+                    Text("Missing: Data/INI/Default/Weather.ini (normally inside INI.big).").font(.callout)
+                }
+                if !report.languageFound {
+                    Text("Missing: Zero Hour language text (Data/<Language>/generals.csf, normally inside EnglishZH.big or the same for your language). A Generals-only string table is not enough.")
+                        .font(.callout)
+                }
+            }
+
+            ForEach(report.warnings, id: \.self) { w in
+                Label(w, systemImage: "info.circle").font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct MissingList: View {
+    let title: String
+    let items: [GXGDMissingItem]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.subheadline.bold())
+            ForEach(items, id: \.display) { item in
+                HStack(alignment: .top, spacing: 6) {
+                    Text(item.name).font(.caption.monospaced())
+                    Text("- " + item.reason).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+private struct InterruptedView: View {
+    @Environment(AppModel.self) private var model
+    let interrupted: InterruptedImport
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            StatusHeadline(symbol: "arrow.clockwise.circle.fill", tint: .blue, title: "An import was interrupted",
+                           subtitle: "\(interrupted.filesStaged) of \(interrupted.filesTotal) files (\(ByteCountFormatter.string(fromByteCount: Int64(interrupted.bytesStaged), countStyle: .file))) from \(interrupted.sourceName) were already copied. Resuming skips them.")
+            HStack(spacing: 12) {
+                Button { model.resumeInterruptedImport() } label: { Label("Resume import", systemImage: "play.circle") }
+                    .disabled(!interrupted.canResumeAutomatically)
+                Button(role: .destructive) { model.discardInterruptedImport() } label: { Label("Discard partial import", systemImage: "trash") }
+            }
+            if !interrupted.canResumeAutomatically {
+                Text("To resume, choose the same folder again.").font(.footnote).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct PickerControls: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        @Bindable var model = model
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Button {
+                    model.presentFolderPicker(.gameFolder)
+                } label: {
+                    Label(model.isGameDataReady ? "Replace game data..." : "Choose game folder...", systemImage: "folder.badge.plus")
+                }
+                .buttonStyle(.borderedProminent)
+
+                if model.awaitingBaseFolder {
+                    Button {
+                        model.presentFolderPicker(.baseFolder)
+                    } label: {
+                        Label("Choose separate Generals folder...", systemImage: "folder")
+                    }
+                }
+
+                Button { model.recheck() } label: { Label("Check again", systemImage: "arrow.clockwise") }
+            }
+            Toggle(isOn: Binding(get: { model.importInPlace }, set: { model.setImportInPlace($0) })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Use files in place (advanced)")
+                    Text("Skips the copy and reads your folder where it is. It must stay available; the copy is safer and faster to load.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
+            Text("Tip: files you place in this app's Documents/GameData folder with the Files app are detected automatically.")
+                .font(.footnote).foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct WhereToGetFiles: View {
+    var body: some View {
+        DisclosureGroup("Where do I get the files?") {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("This app does not include any game files. You need your own legally owned copy of Command & Conquer: Generals and Command & Conquer: Generals - Zero Hour, installed on a computer.")
+                Text("Steam: Zero Hour is app ID 2732960 and the base game Generals is app ID 2229870. Install them with the Steam client, then copy the game folders to this headset (Files app, AirDrop or iCloud Drive) or choose them from a connected drive. Keep the folders exactly as installed: Steam keeps the base game inside a ZH_Generals folder, and that layout is supported.")
+                Text("Discs (CD/ISO): install both games on a computer first and copy the installed folders. Raw ISO, CAB, MSI and setup.exe files cannot be used.")
+                Text("Copy everything, including the Data folder and the videos. Both games are needed because Zero Hour builds on Generals. See docs/GAME_DATA_SETUP.md in the project for the full list of required files.")
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .padding(.top, 6)
+        }
     }
 }

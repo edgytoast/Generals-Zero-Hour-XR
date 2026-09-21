@@ -33,6 +33,10 @@ endif()
 # Top level project, doesn't really affect anything.
 project(genzh LANGUAGES C CXX)
 
+# GeneralsX @build visionOS port: GX_PLATFORM_VISIONOS / SAGE_BUILD_VISIONOS_LIB.
+# Self-guarded: does nothing but define FALSE on every other platform.
+include(cmake/platform.cmake)
+
 # GeneralsX @build BenderAI 10/02/2026
 # Linux port: Make CompatLib headers globally accessible so Core libraries (WWLib, WWMath, etc.)
 # can access platform compatibility types when building for non-Windows platforms

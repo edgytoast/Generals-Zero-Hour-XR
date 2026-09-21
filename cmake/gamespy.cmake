@@ -7,7 +7,20 @@ FetchContent_Declare(
     GIT_TAG        07e3d15c500415abc281efb74322ab6d9c857eb8
 )
 
+# GeneralsX @build visionOS port: GamespySDK builds whatever BUILD_SHARED_LIBS says
+# (SHARED by default). The visionOS host app links the engine statically and has no
+# place to embed and re-sign a dylib, so force STATIC for this dependency only.
+if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+    set(_gx_saved_shared_libs "${BUILD_SHARED_LIBS}")
+    set(BUILD_SHARED_LIBS OFF)
+endif()
+
 FetchContent_MakeAvailable(gamespy)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "visionOS")
+    set(BUILD_SHARED_LIBS "${_gx_saved_shared_libs}")
+    unset(_gx_saved_shared_libs)
+endif()
 
 # GeneralsX @build Android port 07/07/2026 bionic ships no pthread_cancel;
 # GamespySDK's gsthreadlinux.c calls it in its thread-cancel helper (a

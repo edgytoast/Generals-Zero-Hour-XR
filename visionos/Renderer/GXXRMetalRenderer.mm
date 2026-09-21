@@ -5,88 +5,38 @@
 #include <cstddef>
 #include <vector>
 
+#import "GXXRTestGeometry.h"
 #import "ShaderTypes.h"
 
-namespace {
+using gxxr::Range;
 
-struct Range {
-    NSUInteger first = 0;
-    NSUInteger count = 0;
-};
+@implementation GXXRCompositeLayer
 
-// Sizes of the test tabletop, meters. Board space: origin at board center on the
-// play surface, +X right, +Z toward the player, +Y up.
-constexpr float kBoardHalfX = 0.5f;
-constexpr float kBoardHalfZ = 0.3f;
++ (instancetype)layerWithName:(NSString*)name
+                      texture:(id<MTLTexture>)texture
+                     position:(simd_float3)position
+                  orientation:(simd_quatf)orientation
+                   sizeMeters:(simd_float2)sizeMeters
+                        flipY:(BOOL)flipY {
+    GXXRCompositeLayer* l = [[GXXRCompositeLayer alloc] init];
+    l.name = name;
+    l.texture = texture;
+    l.position = position;
+    l.orientation = orientation;
+    l.sizeMeters = sizeMeters;
+    l.flipY = flipY;
+    l.premultipliedAlpha = YES;
+    l.gammaEncoded = ![GXXRMetalRenderer isSRGBFormat:texture.pixelFormat];
+    return l;
+}
 
-class MeshBuilder {
-public:
-    std::vector<GXXRVertex> v;
-
-    void tri(simd_float3 a, simd_float3 b, simd_float3 c, simd_float3 n, simd_float4 col) {
-        push(a, n, col);
-        push(b, n, col);
-        push(c, n, col);
-    }
-    void quad(simd_float3 a, simd_float3 b, simd_float3 c, simd_float3 d, simd_float3 n, simd_float4 col) {
-        tri(a, b, c, n, col);
-        tri(a, c, d, n, col);
-    }
-    // Axis-aligned box.
-    void box(simd_float3 c, simd_float3 h, simd_float4 col) {
-        const float x0 = c.x - h.x, x1 = c.x + h.x, y0 = c.y - h.y, y1 = c.y + h.y, z0 = c.z - h.z, z1 = c.z + h.z;
-        quad({x0, y1, z1}, {x1, y1, z1}, {x1, y1, z0}, {x0, y1, z0}, {0, 1, 0}, col);   // top
-        quad({x0, y0, z0}, {x1, y0, z0}, {x1, y0, z1}, {x0, y0, z1}, {0, -1, 0}, col);  // bottom
-        quad({x0, y0, z1}, {x1, y0, z1}, {x1, y1, z1}, {x0, y1, z1}, {0, 0, 1}, col);   // +Z
-        quad({x1, y0, z0}, {x0, y0, z0}, {x0, y1, z0}, {x1, y1, z0}, {0, 0, -1}, col);  // -Z
-        quad({x1, y0, z1}, {x1, y0, z0}, {x1, y1, z0}, {x1, y1, z1}, {1, 0, 0}, col);   // +X
-        quad({x0, y0, z0}, {x0, y0, z1}, {x0, y1, z1}, {x0, y1, z0}, {-1, 0, 0}, col);  // -X
-    }
-    // Square-base pyramid; c is the center of the base.
-    void pyramid(simd_float3 c, float halfBase, float height, simd_float4 col) {
-        const simd_float3 p00 = {c.x - halfBase, c.y, c.z - halfBase};
-        const simd_float3 p10 = {c.x + halfBase, c.y, c.z - halfBase};
-        const simd_float3 p11 = {c.x + halfBase, c.y, c.z + halfBase};
-        const simd_float3 p01 = {c.x - halfBase, c.y, c.z + halfBase};
-        const simd_float3 apex = {c.x, c.y + height, c.z};
-        quad(p00, p10, p11, p01, {0, -1, 0}, col);
-        side(p01, p11, apex, col);  // +Z
-        side(p11, p10, apex, col);  // +X
-        side(p10, p00, apex, col);  // -Z
-        side(p00, p01, apex, col);  // -X
-    }
-    // Flat horizontal quad from (x0,z0) to (x1,z1) at height y, facing +Y.
-    void floorQuad(float x0, float z0, float x1, float z1, float y, simd_float4 col) {
-        quad({x0, y, z1}, {x1, y, z1}, {x1, y, z0}, {x0, y, z0}, {0, 1, 0}, col);
-    }
-    Range mark(NSUInteger first) const { return Range{first, (NSUInteger)v.size() - first}; }
-
-private:
-    void push(simd_float3 p, simd_float3 n, simd_float4 c) {
-        GXXRVertex vert = {{p.x, p.y, p.z}, {n.x, n.y, n.z}, {c.x, c.y, c.z, c.w}};
-        v.push_back(vert);
-    }
-    void side(simd_float3 a, simd_float3 b, simd_float3 apex, simd_float4 col) {
-        simd_float3 n = simd_normalize(simd_cross(b - a, apex - a));
-        tri(a, b, apex, n, col);
-    }
-};
-
-simd_float4x4 translation(simd_float3 t) {
-    simd_float4x4 m = matrix_identity_float4x4;
-    m.columns[3] = simd_make_float4(t.x, t.y, t.z, 1.0f);
+- (simd_float4x4)worldFromQuad {
+    simd_float4x4 m = simd_matrix4x4(_orientation);
+    m.columns[3] = simd_make_float4(_position, 1.0f);
     return m;
 }
 
-simd_float4x4 rotationY(float radians) {
-    const float c = std::cos(radians), s = std::sin(radians);
-    simd_float4x4 m = matrix_identity_float4x4;
-    m.columns[0] = simd_make_float4(c, 0, -s, 0);
-    m.columns[2] = simd_make_float4(s, 0, c, 0);
-    return m;
-}
-
-}  // namespace
+@end
 
 @implementation GXXRMetalRenderer {
     id<MTLDevice> _device;
@@ -96,6 +46,8 @@ simd_float4x4 rotationY(float radians) {
     id<MTLRenderPipelineState> _scenePipeline;
     id<MTLRenderPipelineState> _groundPipeline;
     id<MTLRenderPipelineState> _compositePipeline;
+    id<MTLRenderPipelineState> _layerPipeline;
+    id<MTLDepthStencilState> _depthAlwaysWrite;  // fullscreen eye composite: writes the fragment's depth
     id<MTLDepthStencilState> _depthWrite;   // reverse-Z, write on
     id<MTLDepthStencilState> _depthTestOnly;
     id<MTLDepthStencilState> _depthOff;
@@ -105,6 +57,10 @@ simd_float4x4 rotationY(float radians) {
     Range _orbiter;    // board-local, animated per frame
     Range _floorGrid;  // world space
     Range _shadow;     // floor-relative, board-local xz
+}
+
++ (BOOL)isSRGBFormat:(MTLPixelFormat)f {
+    return f == MTLPixelFormatBGRA8Unorm_sRGB || f == MTLPixelFormatRGBA8Unorm_sRGB;
 }
 
 - (id<MTLDevice>)device { return _device; }
@@ -172,6 +128,23 @@ simd_float4x4 rotationY(float radians) {
     _compositePipeline = [device newRenderPipelineStateWithDescriptor:cd error:&error];
     if (!_compositePipeline) { NSLog(@"[GXXR] composite pipeline failed: %@", error); return nil; }
 
+    MTLRenderPipelineDescriptor* ld = [MTLRenderPipelineDescriptor new];
+    ld.vertexFunction = [library newFunctionWithName:@"layer_vertex"];
+    ld.fragmentFunction = [library newFunctionWithName:@"layer_fragment"];
+    ld.colorAttachments[0].pixelFormat = colorFormat;
+    ld.depthAttachmentPixelFormat = depthFormat;
+    ld.label = @"GXXR layer quad (premultiplied)";
+    MTLRenderPipelineColorAttachmentDescriptor* lca = ld.colorAttachments[0];
+    lca.blendingEnabled = YES;
+    lca.rgbBlendOperation = MTLBlendOperationAdd;
+    lca.alphaBlendOperation = MTLBlendOperationAdd;
+    lca.sourceRGBBlendFactor = MTLBlendFactorOne;
+    lca.sourceAlphaBlendFactor = MTLBlendFactorOne;
+    lca.destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+    lca.destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+    _layerPipeline = [device newRenderPipelineStateWithDescriptor:ld error:&error];
+    if (!_layerPipeline) { NSLog(@"[GXXR] layer pipeline failed: %@", error); return nil; }
+
     MTLDepthStencilDescriptor* dd = [MTLDepthStencilDescriptor new];
     dd.depthCompareFunction = MTLCompareFunctionGreaterEqual;  // reverse-Z
     dd.depthWriteEnabled = YES;
@@ -180,6 +153,8 @@ simd_float4x4 rotationY(float radians) {
     _depthTestOnly = [device newDepthStencilStateWithDescriptor:dd];
     dd.depthCompareFunction = MTLCompareFunctionAlways;
     _depthOff = [device newDepthStencilStateWithDescriptor:dd];
+    dd.depthWriteEnabled = YES;
+    _depthAlwaysWrite = [device newDepthStencilStateWithDescriptor:dd];
 
     [self buildGeometry];
     return self;
@@ -188,85 +163,16 @@ simd_float4x4 rotationY(float radians) {
 #pragma mark - Geometry
 
 - (void)buildGeometry {
-    MeshBuilder m;
-    auto rgb = [](float r, float g, float b, float a = 1.0f) { return simd_make_float4(r, g, b, a); };
-
-    // ---- Static board (board-local) ----
-    NSUInteger start = m.v.size();
-    m.box({0, -0.0205f, 0}, {kBoardHalfX + 0.02f, 0.02f, kBoardHalfZ + 0.02f}, rgb(0.13f, 0.14f, 0.16f));  // slab
-    const int nx = 10, nz = 6;
-    const float tx = 2 * kBoardHalfX / nx, tz = 2 * kBoardHalfZ / nz;
-    for (int iz = 0; iz < nz; ++iz) {
-        for (int ix = 0; ix < nx; ++ix) {
-            const bool dark = ((ix + iz) & 1) != 0;
-            simd_float4 c = dark ? rgb(0.30f, 0.38f, 0.22f) : rgb(0.42f, 0.50f, 0.30f);
-            const float x0 = -kBoardHalfX + ix * tx, z0 = -kBoardHalfZ + iz * tz;
-            m.floorQuad(x0, z0, x0 + tx, z0 + tz, 0.0f, c);
-        }
-    }
-    // Lake and road (flush details so the board reads as terrain).
-    m.floorQuad(-0.02f, -0.30f, 0.14f, -0.06f, 0.0008f, rgb(0.16f, 0.32f, 0.55f));
-    m.floorQuad(-0.50f, 0.16f, 0.50f, 0.20f, 0.0008f, rgb(0.55f, 0.52f, 0.45f));
-    // Corner posts: orientation reference (mirroring or swapped eyes is obvious).
-    const float py = 0.03f;
-    m.box({-kBoardHalfX, py, -kBoardHalfZ}, {0.012f, py, 0.012f}, rgb(0.90f, 0.15f, 0.12f));  // back-left  red
-    m.box({kBoardHalfX, py, -kBoardHalfZ}, {0.012f, py, 0.012f}, rgb(0.15f, 0.80f, 0.25f));   // back-right green
-    m.box({kBoardHalfX, py, kBoardHalfZ}, {0.012f, py, 0.012f}, rgb(0.20f, 0.35f, 0.95f));    // front-right blue
-    m.box({-kBoardHalfX, py, kBoardHalfZ}, {0.012f, py, 0.012f}, rgb(0.95f, 0.85f, 0.15f));   // front-left yellow
-    // Blue team: cubes with turrets.
-    const simd_float2 blue[] = {{-0.32f, -0.12f}, {-0.26f, 0.00f}, {-0.32f, 0.10f}};
-    for (auto p : blue) {
-        m.box({p.x, 0.015f, p.y}, {0.03f, 0.015f, 0.045f}, rgb(0.20f, 0.40f, 0.95f));
-        m.box({p.x, 0.035f, p.y}, {0.018f, 0.008f, 0.02f}, rgb(0.12f, 0.25f, 0.70f));
-        m.box({p.x + 0.04f, 0.036f, p.y}, {0.025f, 0.004f, 0.004f}, rgb(0.85f, 0.85f, 0.90f));
-    }
-    // Red team: pyramids.
-    const simd_float2 red[] = {{0.30f, -0.10f}, {0.24f, 0.03f}, {0.32f, 0.11f}};
-    for (auto p : red) m.pyramid({p.x, 0.0f, p.y}, 0.03f, 0.07f, rgb(0.92f, 0.22f, 0.18f));
-    // Objective: tall yellow pyramid at center; green crate; orange crate.
-    m.pyramid({0.0f, 0.0f, 0.02f}, 0.035f, 0.13f, rgb(0.95f, 0.78f, 0.12f));
-    m.box({0.20f, 0.02f, -0.20f}, {0.02f, 0.02f, 0.02f}, rgb(0.20f, 0.75f, 0.35f));
-    m.box({-0.12f, 0.012f, -0.20f}, {0.03f, 0.012f, 0.015f}, rgb(0.95f, 0.50f, 0.10f));
-    _board = m.mark(start);
-
-    // ---- Orbiter (drawn at origin, animated) ----
-    start = m.v.size();
-    m.box({0, 0, 0}, {0.015f, 0.015f, 0.015f}, rgb(0.98f, 0.98f, 1.0f));
-    m.pyramid({0, 0.015f, 0}, 0.012f, 0.02f, rgb(0.98f, 0.30f, 0.80f));
-    _orbiter = m.mark(start);
-
-    // ---- World floor grid (translucent, y ~ 0) ----
-    start = m.v.size();
-    const float extent = 6.0f;
-    for (int i = -12; i <= 12; ++i) {
-        const float p = i * 0.5f;
-        const bool major = (i % 4) == 0;
-        const float w = major ? 0.008f : 0.004f;
-        const float a = major ? 0.55f : 0.30f;
-        simd_float4 c = rgb(0.62f, 0.78f, 0.95f, a);
-        m.floorQuad(p - w, -extent, p + w, extent, 0.001f, c);  // line along Z
-        m.floorQuad(-extent, p - w, extent, p + w, 0.001f, c);  // line along X
-    }
-    // Origin cross (where the player's floor origin is).
-    m.floorQuad(-0.25f, -0.012f, 0.25f, 0.012f, 0.0015f, rgb(0.25f, 0.85f, 0.95f, 0.85f));
-    m.floorQuad(-0.012f, -0.25f, 0.012f, 0.25f, 0.0015f, rgb(0.25f, 0.85f, 0.95f, 0.85f));
-    _floorGrid = m.mark(start);
-
-    // ---- Contact shadow under the board: nested translucent quads (soft-ish edge) ----
-    start = m.v.size();
-    for (int i = 0; i < 5; ++i) {
-        const float grow = 0.05f * (float)(4 - i);
-        m.floorQuad(-(kBoardHalfX + 0.02f + grow), -(kBoardHalfZ + 0.02f + grow),
-                    (kBoardHalfX + 0.02f + grow), (kBoardHalfZ + 0.02f + grow), 0.002f + 0.0001f * i,
-                    rgb(0.0f, 0.0f, 0.0f, 0.07f));
-    }
-    _shadow = m.mark(start);
-
-    _vertexBuffer = [_device newBufferWithBytes:m.v.data()
-                                         length:m.v.size() * sizeof(GXXRVertex)
+    gxxr::TestGeometry g = gxxr::BuildTestGeometry();
+    _board = g.board;
+    _orbiter = g.orbiter;
+    _floorGrid = g.floorGrid;
+    _shadow = g.shadow;
+    _vertexBuffer = [_device newBufferWithBytes:g.vertices.data()
+                                         length:g.vertices.size() * sizeof(GXXRVertex)
                                         options:MTLResourceStorageModeShared];
     _vertexBuffer.label = @"GXXR test scene vertices";
-    NSLog(@"[GXXR] test scene: %zu vertices (%lu bytes)", m.v.size(), (unsigned long)(m.v.size() * sizeof(GXXRVertex)));
+    NSLog(@"[GXXR] test scene: %zu vertices (%lu bytes)", g.vertices.size(), (unsigned long)(g.vertices.size() * sizeof(GXXRVertex)));
 }
 
 #pragma mark - Encoding
@@ -331,8 +237,7 @@ simd_float4x4 rotationY(float radians) {
 
         // Animated orbiter, in board space.
         const float t = timeSeconds;
-        simd_float4x4 local = simd_mul(translation(simd_make_float3(0.15f * std::cos(t * 0.9f), 0.05f + 0.01f * std::sin(t * 2.3f), 0.15f * std::sin(t * 0.9f))),
-                                       rotationY(t * 1.7f));
+        simd_float4x4 local = gxxr::OrbiterLocalTransform(t);
         GXXRSceneUniforms ou = u;
         ou.worldFromModel = simd_mul(worldFromBoard, local);
         draw(_orbiter, ou);
@@ -345,7 +250,7 @@ simd_float4x4 rotationY(float radians) {
     // floor-origin devices and head-relative on the simulator.
     const float floorY = hasBoard ? worldFromBoard.columns[3].y - 0.8f : 0.0f;
     GXXRSceneUniforms gu = u;
-    gu.worldFromModel = translation(simd_make_float3(0.0f, floorY, 0.0f));
+    gu.worldFromModel = gxxr::Translation(simd_make_float3(0.0f, floorY, 0.0f));
     draw(_floorGrid, gu);
     if (hasBoard) {
         // Shadow lives on the floor directly below the board.
@@ -366,17 +271,65 @@ simd_float4x4 rotationY(float radians) {
                       depth:(id<MTLTexture>)depth
                    viewport:(MTLViewport)viewport
                       clear:(BOOL)clear {
+    [self encodeEyeCompositeInto:commandBuffer source:source flags:flags uvRect:simd_make_float4(0, 0, 1, 1) constantDepth:0.0f
+                           color:color colorSlice:slice depth:depth viewport:viewport clear:clear];
+}
+
+- (void)encodeEyeCompositeInto:(id<MTLCommandBuffer>)commandBuffer
+                        source:(id<MTLTexture>)source
+                         flags:(uint32_t)flags
+                        uvRect:(simd_float4)uvRect
+                 constantDepth:(float)constantDepth
+                         color:(id<MTLTexture>)color
+                    colorSlice:(NSUInteger)slice
+                         depth:(id<MTLTexture>)depth
+                      viewport:(MTLViewport)viewport
+                         clear:(BOOL)clear {
     id<MTLRenderCommandEncoder> enc = [commandBuffer renderCommandEncoderWithDescriptor:[self passWithColor:color slice:slice depth:depth clear:clear]];
     enc.label = @"GXXR composite external eye";
     [enc setViewport:viewport];
     [enc setCullMode:MTLCullModeNone];
     [enc setRenderPipelineState:_compositePipeline];
-    [enc setDepthStencilState:_depthOff];
+    [enc setDepthStencilState:_depthAlwaysWrite];
     GXXRCompositeParams p = {};
     p.flags = flags;
+    p.depth = constantDepth;
+    p.uvRect = uvRect;
     [enc setFragmentBytes:&p length:sizeof(p) atIndex:GXXRBufferIndexCompositeParams];
     [enc setFragmentTexture:source atIndex:0];
     [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [enc endEncoding];
+}
+
+- (void)encodeLayers:(NSArray<GXXRCompositeLayer*>*)layers
+                into:(id<MTLCommandBuffer>)commandBuffer
+               color:(id<MTLTexture>)color
+          colorSlice:(NSUInteger)slice
+               depth:(id<MTLTexture>)depth
+            viewport:(MTLViewport)viewport
+       clipFromWorld:(simd_float4x4)clipFromWorld {
+    if (layers.count == 0) return;
+    id<MTLRenderCommandEncoder> enc = [commandBuffer renderCommandEncoderWithDescriptor:[self passWithColor:color slice:slice depth:depth clear:NO]];
+    enc.label = @"GXXR composite layers";
+    [enc setViewport:viewport];
+    [enc setCullMode:MTLCullModeNone];
+    [enc setRenderPipelineState:_layerPipeline];
+    [enc setDepthStencilState:_depthWrite];  // reverse-Z GreaterEqual + write
+    for (GXXRCompositeLayer* layer in layers) {
+        if (!layer.texture) continue;
+        GXXRLayerUniforms u = {};
+        u.clipFromWorld = clipFromWorld;
+        u.worldFromQuad = layer.worldFromQuad;
+        u.halfSize = layer.sizeMeters * 0.5f;
+        GXXRCompositeParams p = {};
+        p.flags = (layer.flipY ? GXXR_COMPOSITE_FLIP_Y : 0u) | (layer.premultipliedAlpha ? 0u : GXXR_COMPOSITE_PREMULTIPLY) |
+                  (layer.gammaEncoded ? GXXR_COMPOSITE_SRGB_DECODE : 0u);
+        p.uvRect = simd_make_float4(0, 0, 1, 1);
+        [enc setVertexBytes:&u length:sizeof(u) atIndex:GXXRBufferIndexUniforms];
+        [enc setFragmentBytes:&p length:sizeof(p) atIndex:GXXRBufferIndexCompositeParams];
+        [enc setFragmentTexture:layer.texture atIndex:0];
+        [enc drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+    }
     [enc endEncoding];
 }
 
