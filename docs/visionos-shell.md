@@ -262,6 +262,9 @@ let them pick a folder (`LSSupportsOpeningDocumentsInPlace`).
 
 ## Measured results
 
+(Measured with the previous design in which the ANGLE test scene ran on the compositor thread. The current numbers for the decoupled design, with the
+test scene as a fake engine on its own thread, are in `docs/visionos-engine-host.md` section 12.)
+
 All numbers below were measured on the visionOS 26.5 **simulator** (Apple silicon host, Xcode 27.0, Debug build,
 `-layout dedicated` unless stated) while the machine was heavily shared with other builds and simulators (load average
 well above 500), so absolute CPU times are indicative only and nothing here says anything about a physical Vision Pro.
