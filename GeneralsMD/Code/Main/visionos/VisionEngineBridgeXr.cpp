@@ -7,8 +7,14 @@
 #include "gx_backend.h" // GX_XR_HOST
 
 #if defined(GX_XR_HOST)
-
 #include "XrGameBoot.h"
+#endif
+
+// The forwarding body is compiled only where the XrGameBoot_* API is actually declared and defined: on Android, and on any
+// other GX_XR_HOST platform once package C has made XrGameBoot.h host neutral and defined the functions. C signals that by
+// defining GX_XRGAMEBOOT_HOST (in XrGameBoot.h or as a target compile definition). Until then the factory below returns
+// nullptr, so adding this file to the engine library (visionos/*.cpp glob) can never break the build.
+#if defined(GX_XR_HOST) && (defined(__ANDROID__) || defined(GX_XRGAMEBOOT_HOST))
 
 // GX_VISION_BRIDGE_NO_ENGINE_QUERIES is defined only by scripts/qa/vision-bridge-forward-test.sh, which links the
 // forwarder against recording XrGameBoot_* stubs without the engine headers.
@@ -102,7 +108,7 @@ VisionEngineBridge *VisionCreateXrGameBootBridge() {
 	return &bridge;
 }
 
-#else // !GX_XR_HOST
+#else // no XrGameBoot host API in this build
 
 VisionEngineBridge *VisionCreateXrGameBootBridge() { return nullptr; }
 

@@ -288,8 +288,10 @@ engine object-id buffer mapped to tracking-area values; that is not available an
 
 `VisionXrGameBootBridge` (`GeneralsMD/Code/Main/visionos/VisionEngineBridgeXr.cpp`, obtained with `VisionCreateXrGameBootBridge()`)
 implements `VisionEngineBridge` by forwarding each method to the `XrGameBoot` function of the same name
-(`GeneralsMD/Code/Main/XrGameBoot.h`). It has a body only when `GX_XR_HOST` is defined and includes `XrGameBoot.h`; the
-factory returns `nullptr` otherwise.
+(`GeneralsMD/Code/Main/XrGameBoot.h`). The forwarding body is compiled only where that API is declared and defined: under
+`__ANDROID__`, or when `GX_XR_HOST` **and** `GX_XRGAMEBOOT_HOST` are defined (package C defines the latter, in `XrGameBoot.h` or as a
+compile definition, when it makes the header host neutral). In every other build `VisionCreateXrGameBootBridge()` returns `nullptr`, so
+the file can sit in the `visionos/*.cpp` glob of `z_generals` before package C lands without breaking that build.
 
 | Method | XrGameBoot | Definition today (`XrGameBoot.cpp`) |
 | --- | --- | --- |
@@ -348,6 +350,16 @@ files, and every other file that includes the pure `Xr*.h` headers):
 | `Core/Libraries/Source/d3d8gles/include` | `XRBoardBounds.h` (included by `XrWorld.h`) |
 | `Core/Libraries/Source/WWVegas/WWLib` | `gx_backend.h` (`GX_XR_HOST`); already on the engine include path |
 
+Package A's `z_generals` block does not add the second and third directories yet. With the `visionos-device` flags of `z_generals` alone both
+`VisionInteraction.cpp` and `VisionEngineBridgeXr.cpp` stop at `openxr/openxr.h`; with these two lines they compile (checked with `-fsyntax-only` against
+A's `compile_commands.json`):
+
+```cmake
+target_include_directories(z_generals PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/visionos/xr_shim
+    ${CMAKE_SOURCE_DIR}/Core/Libraries/Source/d3d8gles/include)
+```
+
 `visionos/Platform` does not need to be on the path: `VisionInteraction.h` includes `XRInteraction.h` by relative path (the
 case-insensitive-filesystem hazard of section 8 does not apply).
 
@@ -355,13 +367,14 @@ Verified: `VisionEngineBridgeXr.cpp` compiles (`-fsyntax-only`, with the engine-
 the real engine headers with the flags of package A's `visionos-device` configuration plus the three include directories above,
 and against a copy of `XrGameBoot.h` with the Android/JNI wrapper removed.
 
-**2. Make `XrGameBoot.h` host neutral and define the 27 functions of section 7.** Today the whole header is inside
+**2. Make `XrGameBoot.h` host neutral, define the 27 functions of section 7 and define `GX_XRGAMEBOOT_HOST`.** Today the whole header is inside
 `#ifdef __ANDROID__` and includes `<jni.h>`, and `XrGameBoot_Init` takes `JNIEnv*`. Either widen the guard to `GX_XR_HOST`
 (move the `JNIEnv` declaration behind `__ANDROID__`) and compile `XrGameBoot.cpp` on visionOS with its Android-only parts gated
 (JNI, `__android_log`, `/sdcard`), or write `VisionGameBoot.cpp` as the twin the visionos README describes. The 27 functions
 listed in section 7 (line numbers given there) contain the engine logic (tactics state, world mapping, picking, spatial
 trigger); they must keep their behaviour because the interaction layer is tuned to it. `XrGameBoot.cpp` and `XrGameBoot.h`
-are read-only for package E.
+are read-only for package E. When both are ready define `GX_XRGAMEBOOT_HOST` (for example `#define GX_XRGAMEBOOT_HOST 1` at the top of the widened
+guard in `XrGameBoot.h`): that switches `VisionEngineBridgeXr.cpp` from the `nullptr` factory to the real forwarder.
 
 **3. Construct once, on the render thread:**
 

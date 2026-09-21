@@ -22,7 +22,7 @@ sed -e 's|^#ifdef __ANDROID__|#if 1|' \
     -e 's|^#include "Lib/BaseType.h".*|typedef int Bool;|' \
     "$main/XrGameBoot.h" > "$out_dir/inc/XrGameBoot.h"
 "$CXX" -std=c++17 -Wall -Wextra -Wno-missing-field-initializers -fsanitize=undefined,address -fno-sanitize-recover=undefined \
-  -DGX_XR_HOST=1 -DGX_VISION_BRIDGE_NO_ENGINE_QUERIES=1 \
+  -DGX_XR_HOST=1 -DGX_XRGAMEBOOT_HOST=1 -DGX_VISION_BRIDGE_NO_ENGINE_QUERIES=1 \
   -I"$out_dir/inc" -I"$main/visionos" -I"$main" -I"$main/visionos/xr_shim" \
   -ICore/Libraries/Source/WWVegas/WWLib -ICore/Libraries/Source/d3d8gles/include \
   scripts/qa/vision-bridge-forward-test.cpp "$main/visionos/VisionEngineBridgeXr.cpp" -o "$out_dir/vision-bridge-forward-test"
