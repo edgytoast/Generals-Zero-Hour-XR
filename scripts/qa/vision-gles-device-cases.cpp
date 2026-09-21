@@ -214,15 +214,16 @@ struct EyeSetup {
 	float aspect = 0.75f;
 };
 
-static EyeSetup makeEyes(float parallax = 1.0f)
+static EyeSetup makeEyes(float parallax = 1.0f, float boardScale = 0.01f, float aspect = 0.75f)
 {
 	EyeSetup e;
+	e.aspect = aspect;
 	Mat p; matPerspective(p, 60.f * 3.14159265f / 180.f, 1.f, 1.f, 200.f);
 	for (int eye = 0; eye < 2; ++eye) {
 		Mat v; matTranslate(v, eye == 0 ? parallax : -parallax, 0.f, -40.f); // camera at (∓parallax,0,40) looking -Z
 		matMul(e.clip[eye], p, v);
 	}
-	matIdentity(e.board); e.board[0] = e.board[5] = e.board[10] = 0.01f; // game units -> board units
+	matIdentity(e.board); e.board[0] = e.board[5] = e.board[10] = boardScale; // game units -> board units
 	matIdentity(e.camera);
 	return e;
 }
@@ -274,6 +275,7 @@ struct FrameOptions {
 	int worldDraws = 1;
 	float quadHalf = 10.f;
 	float parallax = 1.f;
+	float boardScale = 0.01f, aspect = 0.75f; // game units -> board units; aspect == -1 = observer (no board clip)
 	bool stereoAtlasArg = false; // the atlas flag the "engine" passes to BeginXRStereo
 };
 
@@ -301,7 +303,7 @@ static FrameResult runFrame(const FrameTargets *f, const FrameOptions &o, IDirec
 	g_dev->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER | D3DCLEAR_STENCIL, 0xFF102030, 1.f, 0);
 
 	// --- the 3D world, drawn once through the ordinary path and replayed per eye by the backend
-	const EyeSetup eyes = makeEyes(o.parallax);
+	const EyeSetup eyes = makeEyes(o.parallax, o.boardScale, o.aspect);
 	r.stereoBegun = d3d8gles_BeginXRStereo(W, Hh, eyes.clip[0], eyes.clip[1], eyes.board, eyes.aspect, eyes.camera, o.stereoAtlasArg, false);
 	setWorldTransforms();
 	setLight(0.f, 0.f, -1.f);
@@ -496,6 +498,48 @@ static void caseAtlas()
 	int qx, qy; projectToPixel(e.clip[1], -10.f, 0.f, 0.f, 256, 0, 256, 256, &qx, &qy);
 	for (int x = 256; x < qx - 4; ++x) if (A.gl(x, 128).a != 0) ++leak;
 	check(leak == 0, "no left-eye pixels leak into the right eye rect (%d stray pixels left of the right eye's quad)", leak);
+	tex->Release();
+}
+
+// The tabletop board clip (XRStereoShader.h GX_XR_STEREO_FRAGMENT_BODY): fragments whose board-space
+// position leaves |x| <= 0.5, |y| <= aspect/2 are discarded; aspect == -1 (observer) switches it off.
+static void caseBoardClip()
+{
+	printf("\n[case] board clipping in the stereo fragment shader (tabletop board bounds, observer opt-out)\n");
+	FrameTargets f;
+	check(makeSlot(&f, 256, 256, true), "atlas ring slot created");
+	IDirect3DTexture8 *tex = makeCheckTexture();
+	// board scale 0.03: |x| <= 0.5 <=> |wx| <= 16.67 game units, |y| <= 0.375 <=> |wy| <= 12.5; the quad
+	// (half 20) is wider than both, and still inside the camera's view (half extent 23 at 40 units)
+	struct Probe { float wx, wy; bool covered; const char *what; };
+	const Probe probes[] = {
+		{ 0.f, 11.f, true, "inside, near the +Y edge" }, { 0.f, 14.f, false, "outside +Y edge" },
+		{ 0.f, -11.f, true, "inside, near the -Y edge" }, { 0.f, -14.f, false, "outside -Y edge" },
+		{ 15.f, 0.f, true, "inside, near the +X edge" }, { 18.f, 0.f, false, "outside +X edge" },
+		{ -15.f, 0.f, true, "inside, near the -X edge" }, { -18.f, 0.f, false, "outside -X edge" },
+	};
+	for (int pass = 0; pass < 2; ++pass) {
+		const bool observer = pass == 1;
+		fillSlot(f, 0xAA);
+		FrameOptions o; o.quadHalf = 20.f; o.boardScale = 0.03f; o.aspect = observer ? -1.0f : 0.75f; o.drawUI = false;
+		FrameResult r = runFrame(&f, o, tex);
+		check(r.stereoBegun, "%s: d3d8gles_BeginXRStereo accepted the atlas target", observer ? "observer (aspect == -1)" : "tabletop");
+		FullTex A;
+		check(A.load(f.eye[0]), "%s: Metal blit readback of the atlas", observer ? "observer" : "tabletop");
+		const EyeSetup e = makeEyes(o.parallax, o.boardScale, o.aspect);
+		int ok = 0, n = 0;
+		for (int eye = 0; eye < 2; ++eye)
+			for (const Probe &p : probes) {
+				int px, py;
+				projectToPixel(e.clip[eye], p.wx, p.wy, 0.f, eye ? 256 : 0, 0, 256, 256, &px, &py);
+				const bool covered = A.gl(px, py).a != 0;
+				const bool want = observer ? true : p.covered;
+				++n;
+				if (covered == want) ++ok; else printf("  eye %d (%s): pixel (%d,%d) covered=%d, expected %d\n", eye, p.what, px, py, covered, want);
+			}
+		if (observer) check(ok == n, "observer: aspect -1 (observer) disables the board clip, every probe covered (%d/%d)", ok, n);
+		else check(ok == n, "tabletop: fragments outside the board bounds discarded, inside kept (%d/%d probes, both eyes)", ok, n);
+	}
 	tex->Release();
 }
 
@@ -883,6 +927,7 @@ int RunDeviceCases(Harness *h, int *checks)
 	caseApiSurface();
 	caseSeparateEyes();
 	caseAtlas();
+	caseBoardClip();
 	caseRingRotation();
 	caseBackendTargets();
 	caseLayersAndElision();
