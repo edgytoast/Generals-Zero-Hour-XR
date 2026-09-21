@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds a libopenal.a for the visionOS simulator (or device) WITH the semaphore fix from
-# visionos/Audio/openal-soft-1.24.2-visionos-alsem.patch, for the audio tests, from the openal-soft source tree the engine
+# scripts/qa/vision-audio-openal-alsem.patch, for the audio tests, from the openal-soft source tree the engine
 # build already fetched (<build>/_deps/openal_soft-src, already carrying cmake/patches/openal-soft-1.24.2-visionos.patch).
 #
 # Why: openal-soft 1.24.2's common/alsem.h only uses libdispatch semaphores for TARGET_OS_IOS/TV; on visionOS it falls back
@@ -24,7 +24,7 @@ if [ ! -f "$out/openal-src-$slice/common/alsem.h" ]; then
   rm -rf "$out/openal-src-$slice"; cp -R "$src_in" "$out/openal-src-$slice"; rm -rf "$out/openal-src-$slice/.git"
 fi
 if ! grep -q "TARGET_OS_VISION" "$out/openal-src-$slice/common/alsem.h"; then
-  (cd "$out/openal-src-$slice" && patch -p1 < "$repo_dir/visionos/Audio/openal-soft-1.24.2-visionos-alsem.patch")
+  (cd "$out/openal-src-$slice" && patch -p1 < "$repo_dir/scripts/qa/vision-audio-openal-alsem.patch")
 fi
 cmake -S "$out/openal-src-$slice" -B "$out/openal-$slice" -G Ninja -DCMAKE_SYSTEM_NAME=visionOS -DCMAKE_OSX_SYSROOT=$sysroot \
   -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=2.0 -DLIBTYPE=STATIC -DALSOFT_RTKIT=OFF -DALSOFT_EXAMPLES=OFF \

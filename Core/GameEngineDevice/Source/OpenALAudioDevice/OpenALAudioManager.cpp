@@ -3605,6 +3605,12 @@ void GXAudio_SetListenerPose(float boardScaleMetersPerWorldUnit, const float hea
 	s_gxHostListener.setPose(boardScaleMetersPerWorldUnit, headPosBoardSpace, headForwardBoardSpace, headUpBoardSpace);
 }
 
+void GXAudio_SetListenerPoseWorld(float metersPerWorldUnit, const float headPosWorld[3], const float headForwardWorld[3],
+                                  const float headUpWorld[3])
+{
+	s_gxHostListener.setPoseWorld(metersPerWorldUnit, headPosWorld, headForwardWorld, headUpWorld);
+}
+
 void GXAudio_SetSpatialBattlefieldAudio(bool enabled) { s_gxHostListener.setSpatial(enabled); }
 bool GXAudio_GetSpatialBattlefieldAudio(void) { return s_gxHostListener.spatial(); }
 bool GXAudio_IsHostListenerActive(void) { return s_gxHostListener.active(); }
@@ -3620,6 +3626,25 @@ void GXAudio_SetMasterVolume(float volume) { s_gxHostMix.setMaster(volume); }
 float GXAudio_GetMasterVolume(void) { return s_gxHostMix.master(); }
 
 void GXAudio_SetCategoryVolume(int category, float volume) { s_gxHostMix.setCategory(category, volume); }
+
+void GXAudio_SetEffectsVolume(float volume)
+{
+	// Same rule as OptionsMenu.cpp (SFX slider): the value goes to both categories, Relative2DVolume lowers one of them.
+	float v2D = gxaudio::HostMixState::clamp01(volume), v3D = v2D;
+	OpenALAudioManager* mgr = s_gxManager.load();
+	if (mgr && mgr->getAudioSettings()) {
+		float relative = mgr->getAudioSettings()->m_relative2DVolume;
+		relative = relative > 1.0f ? 1.0f : (relative < -1.0f ? -1.0f : relative);
+		if (relative < 0.0f) {
+			v2D *= 1.0f + relative;
+		}
+		else {
+			v3D *= 1.0f - relative;
+		}
+	}
+	s_gxHostMix.setCategory(GXAUDIO_CATEGORY_SFX_2D, v2D);
+	s_gxHostMix.setCategory(GXAUDIO_CATEGORY_SFX_3D, v3D);
+}
 
 float GXAudio_GetCategoryVolume(int category)
 {

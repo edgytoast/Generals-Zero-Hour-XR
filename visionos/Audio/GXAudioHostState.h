@@ -81,6 +81,32 @@ public:
 		refreshActive();
 		return true;
 	}
+	// Same as setPose but the head pose is already in game-world units (the host has the room->world mapping at hand, e.g.
+	// XrGameBoot's mapping, and the observer / ground-level view where "board space" is just the room).
+	bool setPoseWorld(float metersPerWorldUnit, const float pos[3], const float fwd[3], const float up[3]) {
+		if (!pos || !fwd || !up || !(metersPerWorldUnit > 1e-9f) || !std::isfinite(metersPerWorldUnit)) return false;
+		const Vec3 p = make(pos[0], pos[1], pos[2]);
+		if (!finite(p)) return false;
+		Vec3 f, u;
+		if (!normalize(make(fwd[0], fwd[1], fwd[2]), make(0, 1, 0), &f)) return false;
+		const Vec3 rawUp = make(up[0], up[1], up[2]);
+		if (!finite(rawUp)) return false;
+		Vec3 uo = sub(rawUp, scale(f, dot(rawUp, f)));
+		if (!normalize(uo, make(0, 0, 1), &uo)) {
+			const Vec3 helper = std::fabs(f.z) < 0.9f ? make(0, 0, 1) : make(0, 1, 0);
+			uo = sub(helper, scale(f, dot(helper, f)));
+			normalize(uo, make(0, 0, 1), &uo);
+		}
+		u = uo;
+		ListenerWorld w;
+		w.position = p; w.forward = f; w.up = u; w.metersPerUnit = metersPerWorldUnit;
+		std::lock_guard<std::mutex> l(m_mutex);
+		if (std::fabs(w.metersPerUnit - m_listener.metersPerUnit) > 1e-9f * (1.0f + w.metersPerUnit)) ++m_generation;
+		m_listener = w;
+		m_poseValid = true;
+		refreshActive();
+		return true;
+	}
 	void setTuning(float refMeters, float rolloff, float maxMeters) {
 		std::lock_guard<std::mutex> l(m_mutex);
 		const TabletopTuning d = defaultTabletopTuning();

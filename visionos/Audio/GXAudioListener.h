@@ -30,6 +30,13 @@ void GXAudio_SetHostListener(bool enabled);
 // right (1,0). Call whenever the map view pans or rotates (cheap; usually together with GXAudio_SetListenerPose).
 void GXAudio_SetBoardFrame(const float centerWorld[3], float rightX, float rightY);
 
+// Same purpose as GXAudio_SetListenerPose, but the head pose is given directly in GAME-WORLD units (position in game units,
+// forward/up in world axes: Z up) together with the board scale. Use it where the host already has the room->world mapping
+// (XrGameBoot's worldToBoard * board pose) or in the ground-level observer view, where there is no board. Board frame is
+// ignored by this call.
+void GXAudio_SetListenerPoseWorld(float metersPerWorldUnit, const float headPosWorld[3], const float headForwardWorld[3],
+                                  const float headUpWorld[3]);
+
 // The user's head in BOARD SPACE (metres) plus the board scale. boardScaleMetersPerWorldUnit = physical board width in
 // metres / world-unit span shown across that width (i.e. how many metres one game unit occupies on the table).
 // Call every frame from the engine thread before the engine frame. Non-finite input or a non-positive scale is
@@ -67,6 +74,10 @@ enum {
 void GXAudio_SetMasterVolume(float volume);            // scales every category (AL listener gain)
 float GXAudio_GetMasterVolume(void);
 void GXAudio_SetCategoryVolume(int category, float volume);
+// One "Effects" slider the way the in-game options menu does it: both SFX categories get the value, and the INI's
+// Relative2DVolume (AudioSettings) lowers one of the two (negative: the 2D one, positive: the 3D one). Use this for a single
+// Effects slider; use SetCategoryVolume when the settings window exposes UI/battlefield effects separately.
+void GXAudio_SetEffectsVolume(float volume);
 float GXAudio_GetCategoryVolume(int category);         // the engine's current system volume (options slider or host, last writer wins)
 
 // ---- Lifecycle --------------------------------------------------------------------------------------------------

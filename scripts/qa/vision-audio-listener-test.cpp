@@ -247,6 +247,18 @@ static void testHostState() {
 	f.setPose(0.0004f, pos, fwd, up);
 	CHECK(nearV(f.snapshot().listener.position, w.position), "degenerate board frame ignored");
 
+	// World-space pose (host already holds the room->world mapping).
+	HostListenerState wp;
+	wp.setHostEnabled(true);
+	const float wpos[3] = {1000, -1250, 1390}, wfwd[3] = {0, 0.853f, -0.521f}, wup[3] = {0, 0, 1};
+	CHECK(wp.setPoseWorld(0.0004f, wpos, wfwd, wup) && wp.active(), "world-space pose activates the listener");
+	const ListenerWorld ww = wp.snapshot().listener;
+	CHECK(nearV(ww.position, make(1000, -1250, 1390)) && near(length(ww.forward), 1) && near(dot(ww.forward, ww.up), 0, 1e-4f), "world pose kept in game units, basis orthonormalised");
+	const float wdeg[3] = {0, 0, 0};
+	CHECK(!wp.setPoseWorld(0.0004f, wpos, wdeg, wup) && !wp.setPoseWorld(0.0f, wpos, wfwd, wup) && !wp.setPoseWorld(0.0004f, badPos, wfwd, wup), "invalid world poses rejected");
+	const float wdown[3] = {0, 0, -1};
+	CHECK(wp.setPoseWorld(0.0004f, wpos, wdown, wdown) && finite(wp.snapshot().listener.up) && near(dot(wp.snapshot().listener.forward, wp.snapshot().listener.up), 0, 1e-4f), "world pose looking straight down with up parallel to forward is repaired");
+
 	// Tuning.
 	HostListenerState t;
 	t.setTuning(2.0f, 0.5f, 10.0f);
