@@ -193,107 +193,110 @@ void EngineThread() {
     uint64_t windowFrames = 0;
     bool loggedWaiting = false;
     double nextDeadline = Now();
-    while (!h.stop.load()) {
-        RunPosted(h);
-        const uint32_t mask = h.pauseMask.load();
-        if (mask != 0) {
-            if (!parked) {
-                parked = true;
-                if (h.client.setPaused) h.client.setPaused(h.client.user, true);
-                h.phase.store(GX_ENGINE_PAUSED);
-                HLOG("parked (pause mask 0x%x)", mask);
-            }
-            WaitFor(h, 0.05);
-            continue;
-        }
-        if (parked) {
-            parked = false;
-            if (h.client.setPaused) h.client.setPaused(h.client.user, false);
-            h.phase.store(GX_ENGINE_RUNNING);
-            HLOG("unparked");
-        }
-        if (sv.headAge(sv.user) > kHeadStaleSeconds) {
-            // No compositor (immersive space closed / not opened yet): nothing to render for. The engine, the
-            // context and the ring stay alive.
-            if (!h.waitingForCompositor.exchange(true) && !loggedWaiting) {
-                loggedWaiting = true;
-                HLOG("waiting for the compositor (no fresh head pose)");
-            }
-            WaitFor(h, 0.02);
-            continue;
-        }
-        if (h.waitingForCompositor.exchange(false)) HLOG("compositor is back; frames resume");
-
-        GXHostFrame frame = {};
-        if (!sv.acquireHead(sv.user, &frame)) {
-            WaitFor(h, 0.005);
-            continue;
-        }
-        GXHostFrameRequest request = {};
-        h.client.describe(h.client.user, &frame.info, &request);
-        if (!sv.beginFrame(sv.user, &frame, &request)) {
-            sv.abortFrame(sv.user, &frame);
-            h.skipped.fetch_add(1);
-            WaitFor(h, 0.005);
-            continue;
-        }
-        const double t0 = Now();
-        GXHostFrameOutput output = {};
-        const bool keepRunning = h.client.frame(h.client.user, &frame, &output);
-        if (!keepRunning) {
-            sv.abortFrame(sv.user, &frame);
-            HLOG("the engine asked to quit");
-            h.phase.store(GX_ENGINE_STOPPING);
-            break;
-        }
-        sv.endFrame(sv.user, &frame, &output);
-        const double t1 = Now();
-        h.produced.fetch_add(1);
-        ++windowFrames;
-        {
-            std::lock_guard<std::mutex> lock(h.mutex);
-            h.lastPublishTime = t1;
-            h.lastFrameMs = (t1 - t0) * 1000.0;
-            h.longestFrameMs = std::max(h.longestFrameMs, h.lastFrameMs);
-        }
-        if (h.lastFrameMs > 500) HLOG("long engine frame: %.0f ms (map load or stall); the compositor keeps presenting the last frame", h.lastFrameMs);
-
-        // Fake clients are paced here; the real engine's FramePacer sleeps inside the frame.
-        if (!h.client.selfPaced && h.client.fpsCap > 0) {
-            // Deadline schedule (not "sleep the remainder"): a late wake-up does not lower the average rate.
-            const double target = 1.0 / h.client.fpsCap;
-            nextDeadline = std::max(nextDeadline + target, t1 - target);  // never try to catch up more than one frame
-            const double wait = nextDeadline - Now();
-            if (wait > 0) [NSThread sleepForTimeInterval:wait];
-        }
-
-        const double now = Now();
-        if (now - windowStart >= 1.0) {
-            std::lock_guard<std::mutex> lock(h.mutex);
-            h.engineFps = (double)windowFrames / (now - windowStart);
-            windowFrames = 0;
-            windowStart = now;
-        }
-        if (now - lastLog >= kBootLogEverySeconds) {
-            lastLog = now;
-            GXHostRingInfo ring = {};
-            if (sv.describeRing) sv.describeRing(sv.user, &ring);
-            HLOG("engine: %.1f fps, %llu frames, %llu skipped, last frame %.1f ms, longest %.0f ms; ring %u slots (%u in use)", h.engineFps,
-                 (unsigned long long)h.produced.load(), (unsigned long long)h.skipped.load(), h.lastFrameMs, h.longestFrameMs, ring.slots,
-                 ring.slotsInUse);
-        }
-        if (h.useRealEngine && now - lastLogicSample >= 10.0) {
-            double logicHz = 0, engineFps = 0;
-            bool inGame = false;
-            if (GXEngineHostEngine_SampleLogicRate(10.0, &logicHz, &engineFps, &inGame)) {
-                lastLogicSample = now;
-                {
-                    std::lock_guard<std::mutex> lock(h.mutex);
-                    h.logicHz = logicHz;
-                    h.logicInGame = inGame;
+    bool leaveLoop = false;
+    while (!h.stop.load() && !leaveLoop) {
+        @autoreleasepool {  // per-iteration pool: ObjC temporaries of the services / mailbox must not pile up for hours
+            RunPosted(h);
+            const uint32_t mask = h.pauseMask.load();
+            if (mask != 0) {
+                if (!parked) {
+                    parked = true;
+                    if (h.client.setPaused) h.client.setPaused(h.client.user, true);
+                    h.phase.store(GX_ENGINE_PAUSED);
+                    HLOG("parked (pause mask 0x%x)", mask);
                 }
-                HLOG("effective logic rate: %.1f Hz at %.1f engine fps over 10 s%s", logicHz, engineFps,
-                     inGame ? " (match running; target 30 Hz)" : " (no unpaused match in the window, not meaningful)");
+                WaitFor(h, 0.05);
+                continue;
+            }
+            if (parked) {
+                parked = false;
+                if (h.client.setPaused) h.client.setPaused(h.client.user, false);
+                h.phase.store(GX_ENGINE_RUNNING);
+                HLOG("unparked");
+            }
+            if (sv.headAge(sv.user) > kHeadStaleSeconds) {
+                // No compositor (immersive space closed / not opened yet): nothing to render for. The engine, the
+                // context and the ring stay alive.
+                if (!h.waitingForCompositor.exchange(true) && !loggedWaiting) {
+                    loggedWaiting = true;
+                    HLOG("waiting for the compositor (no fresh head pose)");
+                }
+                WaitFor(h, 0.02);
+                continue;
+            }
+            if (h.waitingForCompositor.exchange(false)) HLOG("compositor is back; frames resume");
+
+            GXHostFrame frame = {};
+            if (!sv.acquireHead(sv.user, &frame)) {
+                WaitFor(h, 0.005);
+                continue;
+            }
+            GXHostFrameRequest request = {};
+            h.client.describe(h.client.user, &frame.info, &request);
+            if (!sv.beginFrame(sv.user, &frame, &request)) {
+                sv.abortFrame(sv.user, &frame);
+                h.skipped.fetch_add(1);
+                WaitFor(h, 0.005);
+                continue;
+            }
+            const double t0 = Now();
+            GXHostFrameOutput output = {};
+            const bool keepRunning = h.client.frame(h.client.user, &frame, &output);
+            if (!keepRunning) {
+                sv.abortFrame(sv.user, &frame);
+                HLOG("the engine asked to quit");
+                h.phase.store(GX_ENGINE_STOPPING);
+                break;
+            }
+            sv.endFrame(sv.user, &frame, &output);
+            const double t1 = Now();
+            h.produced.fetch_add(1);
+            ++windowFrames;
+            {
+                std::lock_guard<std::mutex> lock(h.mutex);
+                h.lastPublishTime = t1;
+                h.lastFrameMs = (t1 - t0) * 1000.0;
+                h.longestFrameMs = std::max(h.longestFrameMs, h.lastFrameMs);
+            }
+            if (h.lastFrameMs > 500) HLOG("long engine frame: %.0f ms (map load or stall); the compositor keeps presenting the last frame", h.lastFrameMs);
+
+            // Fake clients are paced here; the real engine's FramePacer sleeps inside the frame.
+            if (!h.client.selfPaced && h.client.fpsCap > 0) {
+                // Deadline schedule (not "sleep the remainder"): a late wake-up does not lower the average rate.
+                const double target = 1.0 / h.client.fpsCap;
+                nextDeadline = std::max(nextDeadline + target, t1 - target);  // never try to catch up more than one frame
+                const double wait = nextDeadline - Now();
+                if (wait > 0) [NSThread sleepForTimeInterval:wait];
+            }
+
+            const double now = Now();
+            if (now - windowStart >= 1.0) {
+                std::lock_guard<std::mutex> lock(h.mutex);
+                h.engineFps = (double)windowFrames / (now - windowStart);
+                windowFrames = 0;
+                windowStart = now;
+            }
+            if (now - lastLog >= kBootLogEverySeconds) {
+                lastLog = now;
+                GXHostRingInfo ring = {};
+                if (sv.describeRing) sv.describeRing(sv.user, &ring);
+                HLOG("engine: %.1f fps, %llu frames, %llu skipped, last frame %.1f ms, longest %.0f ms; ring %u slots (%u in use)", h.engineFps,
+                     (unsigned long long)h.produced.load(), (unsigned long long)h.skipped.load(), h.lastFrameMs, h.longestFrameMs, ring.slots,
+                     ring.slotsInUse);
+            }
+            if (h.useRealEngine && now - lastLogicSample >= 10.0) {
+                double logicHz = 0, engineFps = 0;
+                bool inGame = false;
+                if (GXEngineHostEngine_SampleLogicRate(10.0, &logicHz, &engineFps, &inGame)) {
+                    lastLogicSample = now;
+                    {
+                        std::lock_guard<std::mutex> lock(h.mutex);
+                        h.logicHz = logicHz;
+                        h.logicInGame = inGame;
+                    }
+                    HLOG("effective logic rate: %.1f Hz at %.1f engine fps over 10 s%s", logicHz, engineFps,
+                         inGame ? " (match running; target 30 Hz)" : " (no unpaused match in the window, not meaningful)");
+                }
             }
         }
     }
