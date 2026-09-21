@@ -39,9 +39,11 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include <cstdio>
+// GeneralsX @feature visionOS port: GX_XR_HOST / GX_USES_D3D8GLES replace the bare __ANDROID__ tests below.
+#include "gx_backend.h"
 #include "always.h"
 #include "render2d.h"
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 // GeneralsX @bugfix Android port 09/05/2026 - d3d8gles_ShouldUseVulkanBackend()
 #include "d3d8gles.h"
 #endif
@@ -232,7 +234,7 @@ void	  Render2DClass::Update_Bias()
 	// only ever been reported on GLES/ANGLE and never on Vulkan. Skip it on
 	// the native GLES backend only; the Vulkan path keeps the original
 	// behavior, and non-Android builds are untouched.
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 	const bool screenUVBiasApplies = d3d8gles_ShouldUseVulkanBackend();
 #else
 	const bool screenUVBiasApplies = true;
@@ -639,7 +641,7 @@ void	Render2DClass::Add_Outline( const RectClass & rect, float width, const Rect
 
 void Render2DClass::Render()
 {
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 	struct GxUiTimer {
 		std::chrono::steady_clock::time_point t0;
 		int bucket;
@@ -792,11 +794,11 @@ void Render2DClass::Render()
 	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_ADDRESSU, D3DTADDRESS_CLAMP);
 	DX8Wrapper::Set_DX8_Texture_Stage_State(0, D3DTSS_ADDRESSV, D3DTADDRESS_CLAMP);
 
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 	const int gxPrevCat = d3d8gles_SetDrawCategory(D3D8GLES_DRAWCAT_2D);
 #endif
 	DX8Wrapper::Draw_Triangles(0,Indices.Count()/3,0,Vertices.Count());
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 	d3d8gles_SetDrawCategory(gxPrevCat);
 #endif
 

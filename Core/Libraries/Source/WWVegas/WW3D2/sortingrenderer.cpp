@@ -39,6 +39,8 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include "sortingrenderer.h"
+// GeneralsX @feature visionOS port: GX_XR_HOST / GX_USES_D3D8GLES replace the bare __ANDROID__ tests below.
+#include "gx_backend.h"
 #include "dx8vertexbuffer.h"
 #include "dx8indexbuffer.h"
 #include "dx8wrapper.h"
@@ -50,7 +52,7 @@
 #include <wwprofile.h>
 #include <algorithm>
 #include <list>
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 // GeneralsX @perf Android port 09/05/2026 - d3d8gles_SetDrawCategory()
 #include "d3d8gles.h"
 #endif
@@ -606,7 +608,7 @@ void SortingRendererClass::Flush_Sorting_Pool()
 
 void SortingRendererClass::Flush()
 {
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 	const int gxPrevCat = d3d8gles_SetDrawCategory(D3D8GLES_DRAWCAT_SORTED);
 	struct GxCatRestore { int prev; ~GxCatRestore() { d3d8gles_SetDrawCategory(prev); } } gxCatRestore{gxPrevCat};
 #endif

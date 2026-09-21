@@ -35,6 +35,8 @@ static void drawFramerateBar();
 
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////
 #include <chrono>
+// GeneralsX @feature visionOS port: GX_XR_HOST / GX_USES_D3D8GLES replace the bare __ANDROID__ tests below.
+#include "gx_backend.h"
 #include <numeric>
 #include <stdlib.h>
 #include <windows.h>
@@ -618,7 +620,7 @@ static bool s_filteredDirty = true;
 static void buildFilteredResolutions()
 {
 	s_filteredResolutions.clear();
-#if defined(__ANDROID__)
+#if defined(GX_XR_HOST)
 	// GeneralsX @bugfix Android port 14/07/2026 there are no desktop display
 	// modes to enumerate on a fixed-resolution mobile screen, and
 	// Enumerate_Resolutions() returns garbage/null here on Android -- the
@@ -2280,7 +2282,7 @@ AGAIN:
 					// GeneralsX @bugfix Codex 14/09/2026 Campaign/Challenge movie
 					// loops draw here without returning to the outer OpenXR loop.
 					// Yield only presentation after publishing the complete texture.
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 					extern void GX_XR_PresentLoadingFrame();
 					GX_XR_PresentLoadingFrame();
 #endif
@@ -2321,7 +2323,7 @@ AGAIN:
 				}
 
 				// draw all views of the world
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 				// GeneralsX @feature Codex 13/09/2026 Replay GPU geometry only;
 				// do not repeat drawViews/On_Frame_Update for the second eye.
 				extern void GX_XR_BeginStereoWorld();
@@ -2330,7 +2332,7 @@ AGAIN:
 #endif
 				if (!skipViewsForOpaqueShellScreen)
 					drawViews();
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 				GX_XR_EndStereoWorld();
 #endif
 
@@ -2373,7 +2375,7 @@ AGAIN:
 				// end of video example code
 
 				// draw the mouse
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 				// GeneralsX @bugfix Codex 13/09/2026 The XR host draws one cursor on its hit surface.
 				extern bool GX_XR_OffscreenBoot;
 				if(!GX_XR_OffscreenBoot)
@@ -2514,7 +2516,7 @@ AGAIN:
 		}
 		// GeneralsX @bugfix Codex 14/09/2026 Scripted camera moves can also
 		// repeat this draw loop without returning to the XR host.
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 		if(freezeTime && !TheTacticalView->isCameraMovementFinished()) {
 			extern void GX_XR_PresentLoadingFrame();GX_XR_PresentLoadingFrame();
 		}

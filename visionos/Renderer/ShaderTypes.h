@@ -20,14 +20,30 @@ typedef struct {
     simd_float4 params;            // x = time (s), y = fade inner radius, z = fade outer radius, w = unused
 } GXXRSceneUniforms;
 
-// Composite pass flags (external per-eye texture -> compositor drawable).
-#define GXXR_COMPOSITE_FLIP_Y (1u << 0)
+// Composite pass flags (external texture -> compositor drawable).
+#define GXXR_COMPOSITE_FLIP_Y (1u << 0)       // source is bottom-up (OpenGL); sample with v' = 1 - v
 #define GXXR_COMPOSITE_PREMULTIPLY (1u << 1)  // source is straight alpha; premultiply on write
+// Source RGB holds gamma-encoded (sRGB) values in a NON-sRGB pixel format, which is what the
+// engine's D3D8/GL pipeline writes (gamma-space blending). Decode to linear on sampling so the
+// sRGB compositor drawable re-encodes correctly. Un-premultiplies first when the source is
+// premultiplied, decodes, and premultiplies again.
+#define GXXR_COMPOSITE_SRGB_DECODE (1u << 2)
 
 typedef struct {
     unsigned int flags;
-    unsigned int pad0, pad1, pad2;
+    float depth;          // reverse-Z NDC depth written where alpha > 0 (fullscreen eye composite); 0 = far
+    float pad0, pad1;
+    simd_float4 uvRect;   // xy = origin, zw = size of the source rectangle in [0,1] (atlas eye rects)
 } GXXRCompositeParams;
+
+// World-anchored textured quad ("layer") composite: unit quad centered on the local origin,
+// facing local +Z, scaled by halfSize * 2 meters.
+typedef struct {
+    simd_float4x4 clipFromWorld;
+    simd_float4x4 worldFromQuad;
+    simd_float2 halfSize;
+    float pad0, pad1;
+} GXXRLayerUniforms;
 
 enum {
     GXXRBufferIndexVertices = 0,

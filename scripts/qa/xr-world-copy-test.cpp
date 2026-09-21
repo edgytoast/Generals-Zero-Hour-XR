@@ -8,6 +8,7 @@
 #include "XrViewMode.h"
 #include "XRWorldElision.h"
 #include <d3d8.h>
+#include "d3d8gles.h"
 struct WebGLDevice {
  D3DVIEWPORT8 viewport{0,0,64,64,0,1};
  const D3DVIEWPORT8 &getViewport() const {return viewport;}
@@ -34,6 +35,10 @@ struct WebGLPipeline {
  void invalidateCachedGLState(){++invalidations;}
  void destroyXRLayers(){glDeleteFramebuffers(1,&m_xrWorldFBO);glDeleteTextures(1,&m_xrWorldTex);glDeleteTextures(1,&m_xrUITex);m_xrWorldFBO=m_xrWorldTex=m_xrUITex=0;m_xrWorldSnapshotValid=false;}
  void beginXRFrame(bool,bool=false);bool beginXRUI(bool);void finishXRFrame();
+ // GeneralsX @feature visionOS: host-supplied targets / lazy eye-FBO restore; inert on this Android fixture.
+ bool m_hostGL=false,m_xrWorldOwned=true,m_xrUIOwned=true;GLuint m_hostBadName[D3D8GLES_XRT_COUNT]={};
+ GLuint hostTargetFor(int,int,int){return 0;}
+ void leaveXRStereoFBO(){}void syncHostGameTarget(){}bool syncHostLayerTargets(){return true;}
 #include "world-copy-getter.inc"
 };
 #include "world-copy-production.inc"

@@ -5,9 +5,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <deque>
 #include <map>
 #include <mutex>
+#include <set>
+#include <vector>
 
 #include "GXXRInput.h"
 #include "XRInteraction.h"
@@ -39,10 +42,33 @@ struct Manipulation {
     simd_float3 startMid = {0, 0, 0};
 };
 
+// The two enum families are duplicated in GXXRInput.h (Swift-visible) and XRInteraction.h (engine-facing).
+#define GXXR_SAME(a, b) (static_cast<int>(a) == static_cast<int>(b))
+static_assert(GXXR_SAME(GXXRModShift, XR_MOD_SHIFT) && GXXR_SAME(GXXRModControl, XR_MOD_CONTROL) &&
+              GXXR_SAME(GXXRModOption, XR_MOD_OPTION) && GXXR_SAME(GXXRModCommand, XR_MOD_COMMAND),
+              "modifier bits must match");
+static_assert(GXXR_SAME(GXXRCommandSetAdditive, XR_CMD_SET_ADDITIVE) &&
+              GXXR_SAME(GXXRCommandCancelPlacement, XR_CMD_CANCEL_PLACEMENT) &&
+              GXXR_SAME(GXXRCommandCancelAll, XR_CMD_CANCEL_ALL) &&
+              GXXR_SAME(GXXRCommandRecenterBoard, XR_CMD_RECENTER_BOARD) &&
+              GXXR_SAME(GXXRCommandResetWorkspace, XR_CMD_RESET_WORKSPACE) &&
+              GXXR_SAME(GXXRCommandEnterGroundView, XR_CMD_ENTER_GROUND_VIEW) &&
+              GXXR_SAME(GXXRCommandExitGroundView, XR_CMD_EXIT_GROUND_VIEW) &&
+              GXXR_SAME(GXXRCommandRotatePlacementStep, XR_CMD_ROTATE_PLACEMENT_STEP) &&
+              GXXR_SAME(GXXRCommandEngineBack, XR_CMD_ENGINE_BACK),
+              "command ids must match");
+#undef GXXR_SAME
+
+constexpr size_t kQueueCapacity = 256;
+
 struct InputState {
     std::mutex mutex;
     std::map<uint64_t, Pointer> pointers;
+    // Raw ids of pinches that were flushed while the fingers were still down: their remaining drag/end events are
+    // swallowed so a stale drag can never restart as a brand-new pinch.
+    std::set<uint64_t> ignored;
     uint32_t nextPointerId = 1;
+    uint32_t modifiers = 0;
     std::deque<XRInteractionEvent> queue;
     XRInteractionCallback callback = nullptr;
     void* callbackUser = nullptr;
@@ -91,11 +117,43 @@ bool intersectBoard(InputState& s, const XRRay& ray, simd_float3* outBoardPoint)
     return true;
 }
 
-// Must be called with the lock held. Copies the event into the queue and, after
-// unlocking, notifies the callback (done by the caller).
+bool isDroppable(const XRInteractionEvent& e) {
+    return e.type == XR_EVENT_PINCH_DRAG || e.type == XR_EVENT_TWO_HAND_UPDATE || e.type == XR_EVENT_HAND_UPDATE;
+}
+
+// Must be called with the lock held. Drag storms are coalesced (only the newest sample of a run matters); on overflow
+// the oldest droppable sample goes first, and if a BEGIN/END/CANCEL/COMMAND had to be dropped a FLUSH is queued so the
+// consumer can never be left with an unbalanced press.
 void enqueue(InputState& s, const XRInteractionEvent& e) {
+    if (!s.queue.empty() && isDroppable(e)) {
+        XRInteractionEvent& b = s.queue.back();
+        if (b.type == e.type && ((e.type == XR_EVENT_PINCH_DRAG && b.pointer_id == e.pointer_id) ||
+                                 (e.type == XR_EVENT_HAND_UPDATE && b.hand == e.hand) || e.type == XR_EVENT_TWO_HAND_UPDATE)) {
+            b = e;
+            s.stats.coalesced_drags++;
+            return;
+        }
+    }
+    if (s.queue.size() >= kQueueCapacity) {
+        auto it = std::find_if(s.queue.begin(), s.queue.end(), isDroppable);
+        if (it != s.queue.end()) {
+            s.queue.erase(it);
+            s.stats.dropped_events++;
+        } else {
+            // Only BEGIN/END/CANCEL/COMMAND events are queued: the consumer has stopped draining. Any event we drop
+            // could unbalance a press, so drop them ALL and tell the consumer to reset its gesture state. Pinches
+            // still held by the fingers keep sending drags/ends; the consumer ignores those (it never saw the begin).
+            s.stats.dropped_events += s.queue.size();
+            s.queue.clear();
+            XRInteractionEvent f = {};
+            f.type = XR_EVENT_FLUSH;
+            f.timestamp_s = e.timestamp_s;
+            s.queue.push_back(f);
+            s.stats.flushes++;
+            if (e.type == XR_EVENT_PINCH_BEGIN) return;  // its END would arrive without a begin anyway
+        }
+    }
     s.queue.push_back(e);
-    while (s.queue.size() > 256) s.queue.pop_front();
 }
 
 void fillBoardDelta(InputState& s, XRInteractionEvent& e, simd_float3 deltaWorld) {
@@ -155,6 +213,122 @@ void GXXRInputGetStats(GXXRInputStats* out_stats) {
     if (!out_stats) return;
     *out_stats = s.stats;
     out_stats->active_pointers = (uint32_t)s.pointers.size();
+    out_stats->queue_depth = (uint32_t)s.queue.size();
+}
+
+void XRInteraction_PostCommand(XRInteractionCommand command, int32_t value) {
+    InputState& s = S();
+    XRInteractionEvent e = {};
+    e.type = XR_EVENT_COMMAND;
+    e.command = command;
+    e.command_value = value;
+    XRInteractionCallback cb;
+    void* user;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        s.stats.commands++;
+        enqueue(s, e);
+        cb = s.callback;
+        user = s.callbackUser;
+    }
+    if (cb) cb(user, &e);
+}
+
+void XRInteraction_SetModifiers(uint32_t modifiers) {
+    InputState& s = S();
+    XRInteractionEvent e = {};
+    e.type = XR_EVENT_MODIFIERS;
+    e.modifiers = modifiers;
+    e.modifiers_valid = true;
+    XRInteractionCallback cb;
+    void* user;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        if (s.modifiers == modifiers) return;
+        s.modifiers = modifiers;
+        enqueue(s, e);
+        cb = s.callback;
+        user = s.callbackUser;
+    }
+    if (cb) cb(user, &e);
+}
+
+// Cancel everything in flight. Balanced: each active pointer is delivered as PINCH_CANCEL first, then one
+// FLUSH / TRACKING_LOST event tells the consumer to reset all remaining gesture state. Pinches whose fingers are
+// still down are remembered and swallowed until the system reports their end.
+void XRInteraction_Flush(int32_t reason) {
+    InputState& s = S();
+    std::vector<XRInteractionEvent> produced;
+    XRInteractionCallback cb;
+    void* user;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        for (auto& kv : s.pointers) {
+            Pointer& p = kv.second;
+            XRInteractionEvent e = {};
+            e.type = XR_EVENT_PINCH_CANCEL;
+            e.pointer_id = p.id;
+            e.hand = p.hand;
+            e.pointer_kind = p.kind;
+            e.has_ray = p.hasRay;
+            e.ray_world = p.startRay;
+            e.position_world = X(p.pos);
+            e.modifiers_valid = true;
+            e.modifiers = s.modifiers;
+            produced.push_back(e);
+            s.ignored.insert(kv.first);
+            s.stats.cancels++;
+        }
+        s.pointers.clear();
+        if (s.manip.active) {
+            s.manip.active = false;
+            XRInteractionEvent t = {};
+            t.type = XR_EVENT_TWO_HAND_END;
+            t.scale = 1.0f;
+            produced.push_back(t);
+        }
+        XRInteractionEvent f = {};
+        f.type = reason == 0 ? XR_EVENT_FLUSH : XR_EVENT_TRACKING_LOST;
+        f.command_value = reason;
+        produced.push_back(f);
+        s.stats.flushes++;
+        // bounded: forget the oldest ignored ids first if a client never reports ends
+        while (s.ignored.size() > 64) s.ignored.erase(s.ignored.begin());
+        for (auto& e : produced) enqueue(s, e);
+        cb = s.callback;
+        user = s.callbackUser;
+    }
+    if (cb) for (auto& e : produced) cb(user, &e);
+}
+
+void GXXRInputFlush(int32_t reason) { XRInteraction_Flush(reason); }
+void GXXRInputPostCommand(int32_t command, int32_t value) { XRInteraction_PostCommand((XRInteractionCommand)command, value); }
+void GXXRInputSetModifiers(uint32_t modifiers) { XRInteraction_SetModifiers(modifiers); }
+
+void GXXRInputPushHandSample(const GXXRRawHandSample* h) {
+    if (!h) return;
+    InputState& s = S();
+    XRInteractionEvent e = {};
+    e.type = XR_EVENT_HAND_UPDATE;
+    e.timestamp_s = h->timestamp;
+    e.hand = h->chirality == GXXRRawChiralityLeft ? XR_HAND_LEFT : (h->chirality == GXXRRawChiralityRight ? XR_HAND_RIGHT : XR_HAND_UNKNOWN);
+    e.hand_tracked = h->tracked;
+    e.hand_pinching = h->pinching;
+    e.hand_palm_up = h->palm_up;
+    e.has_hand_pose = true;
+    e.hand_pose.position = XRVec3{h->pinch_position[0], h->pinch_position[1], h->pinch_position[2]};
+    e.hand_pose.orientation = XRQuat{0, 0, 0, 1};
+    e.position_world = e.hand_pose.position;
+    XRInteractionCallback cb;
+    void* user;
+    {
+        std::lock_guard<std::mutex> lock(s.mutex);
+        s.stats.hand_samples++;
+        enqueue(s, e);
+        cb = s.callback;
+        user = s.callbackUser;
+    }
+    if (cb) cb(user, &e);
 }
 
 void GXXRInputPushRawSpatialEvent(const GXXRRawSpatialEvent* raw) {
@@ -166,16 +340,33 @@ void GXXRInputPushRawSpatialEvent(const GXXRRawSpatialEvent* raw) {
     {
         std::lock_guard<std::mutex> lock(s.mutex);
         s.stats.raw_events++;
+        // A pinch that was flushed while the fingers were down: swallow it until the system ends it.
+        auto ign = s.ignored.find(raw->event_id);
+        if (ign != s.ignored.end()) {
+            if (raw->phase != GXXRRawPhaseActive) s.ignored.erase(ign);
+            s.stats.swallowed_events++;
+            return;
+        }
+        if (raw->modifiers_valid) s.modifiers = raw->modifiers;
+
         XRInteractionEvent e = {};
         e.timestamp_s = raw->timestamp;
+        e.modifiers_valid = raw->modifiers_valid;
+        e.modifiers = s.modifiers;
+        e.tracking_area_id = raw->tracking_area_id;
         e.hand = raw->chirality == GXXRRawChiralityLeft ? XR_HAND_LEFT : (raw->chirality == GXXRRawChiralityRight ? XR_HAND_RIGHT : XR_HAND_UNKNOWN);
         XRPointerKind kind = XR_POINTER_DEVICE;
         if (raw->kind == GXXRRawKindDirectPinch) kind = XR_POINTER_DIRECT_PINCH;
         else if (raw->kind == GXXRRawKindIndirectPinch) kind = XR_POINTER_INDIRECT_PINCH;
         e.pointer_kind = kind;
+        if (raw->has_pose) {
+            e.has_hand_pose = true;
+            e.hand_pose.position = XRVec3{raw->pose_position[0], raw->pose_position[1], raw->pose_position[2]};
+            e.hand_pose.orientation = XRQuat{raw->pose_rotation[0], raw->pose_rotation[1], raw->pose_rotation[2], raw->pose_rotation[3]};
+        }
 
-        // Position used for drags: the hand pose when available (indirect pinch:
-        // real hand motion), else the reported 3D location.
+        // Position used for drags: the hand pose when available (indirect pinch: real hand motion), else the
+        // reported 3D location.
         simd_float3 pos = raw->has_pose ? F3(raw->pose_position) : (raw->has_location3d ? F3(raw->location3d) : simd_make_float3(0, 0, 0));
         const bool havePos = raw->has_pose || raw->has_location3d;
 
@@ -207,6 +398,11 @@ void GXXRInputPushRawSpatialEvent(const GXXRRawSpatialEvent* raw) {
                 it->second.dragCount++;
                 e.type = XR_EVENT_PINCH_DRAG;
                 s.stats.drags++;
+                if (raw->has_ray) {  // pointing devices (mouse/trackpad) report a fresh ray on every event
+                    e.has_current_ray = true;
+                    e.current_ray.origin = XRVec3{raw->ray_origin[0], raw->ray_origin[1], raw->ray_origin[2]};
+                    e.current_ray.direction = X(simd_normalize(F3(raw->ray_direction)));
+                }
             }
             Pointer& p = it->second;
             e.pointer_id = p.id;
@@ -217,7 +413,8 @@ void GXXRInputPushRawSpatialEvent(const GXXRRawSpatialEvent* raw) {
             e.position_world = X(havePos ? p.pos : simd_make_float3(0, 0, 0));
             simd_float3 delta = havePos ? (p.pos - p.startPos) : simd_make_float3(0, 0, 0);
             fillBoardDelta(s, e, delta);
-            // Board hit: the gaze-targeted point at pinch start, moved by the hand delta.
+            // Board hit: the gaze-targeted point at pinch start, moved by the hand delta (advisory; the interaction
+            // layer does its own board math from the host state).
             e.board_hit = p.startHit;
             if (p.startHit.valid) {
                 simd_float3 moved = simd_make_float3(p.startHit.x_m + e.drag_delta_board.x, 0.0f, p.startHit.z_m + e.drag_delta_board.z);
@@ -257,9 +454,11 @@ void GXXRInputPushRawSpatialEvent(const GXXRRawSpatialEvent* raw) {
             os_log(InputLog(), "spatial %{public}s id=%u board=(%.3f,%.3f) valid=%d", ended ? "END" : "CANCEL", p.id, e.board_hit.x_m, e.board_hit.z_m, (int)e.board_hit.valid);
             s.pointers.erase(it);
             produced.push_back(e);
+        } else {
+            s.stats.swallowed_events++;  // an END/CANCEL for a pinch we never saw begin
         }
 
-        // ---- Two-hand manipulation: two simultaneously held pinches. ----
+        // ---- Two-hand manipulation (advisory TWO_HAND_* events): two simultaneously held pinches. ----
         std::vector<std::pair<uint64_t, Pointer*>> held;
         for (auto& kv : s.pointers) held.push_back({kv.first, &kv.second});
         Manipulation& m = s.manip;

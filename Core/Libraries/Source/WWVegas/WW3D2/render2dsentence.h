@@ -51,6 +51,7 @@
         #include <TargetConditionals.h>
     #endif
     // iOS/Android have no fontconfig; fonts resolve from a bundled fonts/ directory instead
+    // GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT): no fontconfig header on visionOS (matches render2dsentence.cpp).
     #if !(defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE) && !defined(__ANDROID__)
         #include <fontconfig/fontconfig.h>
     #endif

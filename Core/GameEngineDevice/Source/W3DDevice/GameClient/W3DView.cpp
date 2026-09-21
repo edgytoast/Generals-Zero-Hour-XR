@@ -34,6 +34,8 @@
 
 // SYSTEM INCLUDES ////////////////////////////////////////////////////////////////////////////////
 #include <stdlib.h>
+// GeneralsX @feature visionOS port: GX_XR_HOST / GX_USES_D3D8GLES replace the bare __ANDROID__ tests below.
+#include "gx_backend.h"
 #include <windows.h>
 
 // USER INCLUDES //////////////////////////////////////////////////////////////////////////////////
@@ -647,7 +649,7 @@ Bool W3DView::isWithinCameraHeightConstraints() const
 void W3DView::getPickRay(const ICoord2D *screen, Vector3 *rayStart, Vector3 *rayEnd)
 {
 	setFPMode();
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 	// GeneralsX @feature Codex 13/09/2026 A tracked XR ray replaces only the
 	// active pointer pixel; ordinary Android/camera queries are unchanged.
 	extern bool GX_XR_PointerRay(const ICoord2D *,Vector3 *,Vector3 *);
@@ -1857,7 +1859,7 @@ void W3DView::drawView()
 void W3DView::draw()
 {
 	CameraClass *renderCamera=m_3DCamera;
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 	// GeneralsX @feature Codex 13/09/2026 Render-only XR head camera.
 	extern CameraClass *GX_XR_RenderCamera();
 	if(auto *xrCamera=GX_XR_RenderCamera()) renderCamera=xrCamera;
@@ -2546,7 +2548,7 @@ Drawable *W3DView::pickDrawable( const ICoord2D *screen, Bool forceAttack, PickT
 	// Detached XR panels already had first refusal; the legacy HUD must not
 	// create an invisible wall in the back half of the physical table.
 	bool spatialPointer=false;
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 	Vector3 xrStart,xrEnd;
 	extern bool GX_XR_PointerRay(const ICoord2D *,Vector3 *,Vector3 *);
 	spatialPointer=GX_XR_PointerRay(screen,&xrStart,&xrEnd);
@@ -2614,7 +2616,7 @@ Bool W3DView::screenToTerrain( const ICoord2D *screen, Coord3D *world )
 	if( screen == nullptr || world == nullptr || TheTerrainRenderObject == nullptr )
 		return false;
 	bool spatialPointer=false;
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 	Vector3 xrStart,xrEnd;
 	extern bool GX_XR_PointerRay(const ICoord2D *,Vector3 *,Vector3 *);
 	spatialPointer=GX_XR_PointerRay(screen,&xrStart,&xrEnd);
@@ -3801,7 +3803,7 @@ void W3DView::Add_Camera_Shake (const Coord3D & position,float radius,float dura
 
 void W3DView::updateTerrain()
 {
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 	extern bool GX_XR_UpdateTerrainCoverage();
 	if(GX_XR_UpdateTerrainCoverage()) return;
 #endif

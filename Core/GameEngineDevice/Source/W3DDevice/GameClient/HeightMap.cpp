@@ -46,6 +46,8 @@
 //         Includes
 //-----------------------------------------------------------------------------
 #include "W3DDevice/GameClient/HeightMap.h"
+// GeneralsX @feature visionOS port: GX_XR_HOST / GX_USES_D3D8GLES replace the bare __ANDROID__ tests below.
+#include "gx_backend.h"
 
 #ifndef USE_FLAT_HEIGHT_MAP // Flat height map uses flattened textures. jba. [3/20/2003]
 
@@ -90,7 +92,7 @@
 #include "W3DDevice/GameClient/W3DCustomScene.h"
 
 #include "Common/UnitTimings.h" //Contains the DO_UNIT_TIMINGS define jba.
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 // GeneralsX @perf Android port 09/05/2026 - draw-category hook. Forward-declared
 // rather than including d3d8gles.h: that header is not on the gameenginedevice
 // target's include path, and everything links into the same libmain.so.
@@ -124,7 +126,7 @@ static ShaderClass detailOpaqueShader(SC_DETAIL_BLEND);
 // geometry intact while grouping ten 32x32 patches into one Android draw.
 // Ten is the largest safe batch for the legacy 16-bit WW3D buffers:
 // 10 * 6144 indices = 61440 and 10 * 4096 vertices = 40960.
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 static constexpr Int TERRAIN_TILES_PER_VERTEX_BUFFER = 10;
 #else
 static constexpr Int TERRAIN_TILES_PER_VERTEX_BUFFER = 1;
@@ -1928,7 +1930,7 @@ void HeightMapRenderObjClass::updateCenter(CameraClass *camera, const Vector3 *c
 
 void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 {
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 	const int gxPrevCat = d3d8gles_SetDrawCategory(D3D8GLES_DRAWCAT_TERRAIN);
 	struct GxCatRestore { int prev; ~GxCatRestore() { d3d8gles_SetDrawCategory(prev); } } gxCatRestore{gxPrevCat};
 #endif
@@ -2089,7 +2091,7 @@ void HeightMapRenderObjClass::Render(RenderInfoClass & rinfo)
 			}
 		}
 
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 		// GeneralsX @performance Codex 20/09/2026 P26-2 submits each shared
 		// terrain buffer once. The expanded 16-bit index buffer addresses every
 		// unchanged patch in the batch, eliminating up to nine calls/state binds.
@@ -2236,7 +2238,7 @@ void HeightMapRenderObjClass::renderTerrainPass(CameraClass *pCamera)
 
 	DX8Wrapper::Set_Index_Buffer(m_indexBuffer,0);
 
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 	for (Int batch=0; batch<m_numVertexBufferBatches; ++batch)
 	{
 		const Int firstTile=batch*TERRAIN_TILES_PER_VERTEX_BUFFER;

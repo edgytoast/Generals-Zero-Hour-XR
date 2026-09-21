@@ -29,8 +29,12 @@
 */
 
 #pragma once
+// GeneralsX @feature visionOS port - must precede the first GL header (renames the
+// wrapped gl* symbols off Android, see gles_symbols.h).
+#include "gles_symbols.h"
 #include "XRMultiview.h"
 #include "XRWorldElision.h"
+#include "d3d8gles.h" // D3D8GLES_XRTargets (host-supplied render targets)
 
 #include <GLES3/gl3.h>
 #include <cstdint>
@@ -148,6 +152,10 @@ public:
 	void endXRStereo();
 	void drawXRDecorations(const float *vertices,int count);
 	GLuint xrStereoTexture(int eye) const { return eye>=0 && eye<2 && m_xrStereoReady ? m_xrStereoTex[(m_xrStereoAtlas || m_xrStereoMultiview) ? 0:eye]:0; }
+	// GeneralsX @feature visionOS port - host-supplied render targets (d3d8gles.h,
+	// D3D8GLES_XRTargets). Copies the struct; applied lazily at the next
+	// ensureOffscreenTarget/beginXRUI/beginXRStereo. NULL reverts to backend textures.
+	void setXRHostTargets(const D3D8GLES_XRTargets *targets);
 	bool xrStereoMultiview() const {return m_xrStereoReady && m_xrStereoMultiview;}
 	void configureXRMultiview(GXMultiview::Resolver resolver) {m_xrMultiview={};m_xrMultiview.resolver=resolver;}
 	bool xrStereoAtlas() const { return m_xrStereoReady && m_xrStereoAtlas; }
@@ -552,6 +560,42 @@ private:
 	unsigned m_xrEffectDraws=0,m_xrShadowDraws=0;
 	void destroyXRStereo();
 	void destroyXRLayers();
+
+	// GeneralsX @feature visionOS port - host GL (ANGLE-on-Metal) mode. Everything below is
+	// inert on Android: m_hostGL is false unless the XR host supplied a GL resolver.
+	bool m_hostGL = false;              // XR host owns the GL implementation (getProcAddress set)
+	bool m_multiviewAllowed = true;     // false: never allocate OVR_multiview targets
+	bool m_forceAtlas = false;          // backend-allocated stereo targets use one 2W x H atlas
+	D3D8GLES_XRTargets m_hostTargets{}; // last targets from the host (copied)
+	bool m_haveHostTargets = false;
+	// Returns the host's GL name for `slot` when it is usable at w x h, else 0 (logs a
+	// size mismatch once per slot).
+	GLuint hostTargetFor(int slot, int w, int h);
+	bool m_hostTargetWarned[D3D8GLES_XRT_COUNT] = {};
+	GLuint m_hostBadName[D3D8GLES_XRT_COUNT] = {}; // host names that failed framebuffer completeness
+	// Ownership: the backend only deletes textures it created itself.
+	bool m_offColorOwned = true, m_xrWorldOwned = true, m_xrUIOwned = true;
+	void syncHostGameTarget();          // re-attach m_offFBO colour 0 to the current GAME slot
+	bool syncHostLayerTargets();        // re-attach world/UI layer textures; false if a slot fell back
+	// Host stereo targets. m_xrStereoTex[] then holds host names (never deleted).
+	struct HostStereo {
+		bool valid = false, atlas = false;
+		int eyeW = 0, eyeH = 0;         // per-eye render size
+		int texW = 0, texH = 0;         // colour texture size (atlas: whole atlas)
+		GLuint tex[2] = {0, 0};
+		int rect[2][4] = {};
+	};
+	bool hostStereoTargets(HostStereo *out);
+	bool m_xrStereoHost = false;        // current stereo targets are host textures
+	int m_xrStereoTexW = 0, m_xrStereoTexH = 0;
+	int m_xrEyeRect[2][4] = {};         // per-eye viewport {x,y,w,h} in texel coordinates of the eye target
+	// P6: with host GL the eye FBO stays bound after a stereo draw and the ordinary FBO is
+	// restored lazily (leaveXRStereoFBO) instead of ping-ponging on every draw.
+	bool m_xrEyeFBOLeft = false;        // an eye/multiview FBO is bound instead of m_offFBO
+	GLuint m_xrBoundEyeFBO = 0;         // last FBO the stereo path bound (0 = none)
+	void leaveXRStereoFBO();
+	GLuint logicalFBO() const;          // FBO that must be bound for the engine's current target
+	bool m_xrProbeLogged = false;
 	// GeneralsX @feature Quest tabletop recovery 13/09/2026 Diagnostic frame
 	// readback is opt-in. glReadPixels stalls the shared render/XR thread, so
 	// normal headset sessions must never capture periodically by accident.

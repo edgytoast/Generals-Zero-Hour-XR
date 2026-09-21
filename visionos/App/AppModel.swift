@@ -25,9 +25,37 @@ final class AppModel {
     var views = 0
     var lastMessage = ""
 
-    var gameDataPath = "-"
-    var gameDataPresent = false
     var inputSummary = "No spatial events yet."
+
+    // MARK: Game data (logic lives in GameData/AppModel+GameData.swift)
+
+    /// One state for the launcher and the engine bridge. Change it only through
+    /// `setGameData(_:)`, which keeps the C snapshot (GXXRGameData_*) in sync.
+    var gameData: GameDataStatus = .notConfigured
+    /// Human-readable message from the last data operation (import result, error, recovery).
+    var gameDataNotice: String?
+    var gameDataNoticeIsError = false
+    /// What the "checking" spinner is looking at.
+    var validationSubject = ""
+    /// An interrupted import that can be resumed or discarded.
+    var interruptedImport: InterruptedImport?
+    /// Advanced: use the picked folder where it is instead of copying it into the app.
+    var importInPlace = false
+    var filePickerPresented = false
+    var filePickerPurpose: FilePickerPurpose = .gameFolder
+    var confirmRemoveImported = false
+    /// Set once the Zero Hour folder was read but no base Generals folder was found; the next
+    /// pick is then treated as the separate Generals folder.
+    var awaitingBaseFolder = false
+    /// The last folder the player chose that could not be used, shown next to the (preserved)
+    /// working configuration. A rejected pick never discards data that is already ready.
+    var rejectedSelection: GXGDReport?
+
+    @ObservationIgnored var gameDataStartupDone = false
+    @ObservationIgnored var heldScopes: [URL] = []
+    @ObservationIgnored var firstPick: URL?
+    @ObservationIgnored var importTask: Task<Void, Never>?
+    @ObservationIgnored var cancelToken: GXGDCancelToken?
 
     /// Called by CompositorLayer once the layer renderer exists (space is open).
     func layerRendererReady(_ renderer: LayerRenderer) {
@@ -65,13 +93,6 @@ final class AppModel {
         case .open:
             statusText = String(format: "Tabletop live: %.0f fps, %d view(s), %@ layout, head %@", fps, views, layout, headTracked ? "tracked" : "fallback pose")
         }
-
-        var path = [CChar](repeating: 0, count: 1024)
-        var present = false
-        if GXXRBridgeGetGameDataInfo(&path, UInt32(path.count), &present) {
-            gameDataPath = String(cString: path)
-        }
-        gameDataPresent = present
 
         var ist = GXXRInputStats()
         GXXRInputGetStats(&ist)
