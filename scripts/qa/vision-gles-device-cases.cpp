@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -904,6 +905,35 @@ static void caseVaryingPrecision()
 	tex->Release();
 }
 
+// Indicative cost of the no-multiview stereo path (simulator GPU, CPU wall time including the
+// shared-event wait for the GPU): many small world draws, three layouts. The checks assert the
+// structural facts (fewer GL draws with elision, fewer FBO binds in atlas mode); the milliseconds
+// are printed for docs/visionos-gles-backend.md and are only indicative on a simulator.
+static void casePerf()
+{
+	printf("\n[case] cost of the stereo path without multiview (200 world draws per frame, 1024x1024 per eye)\n");
+	IDirect3DTexture8 *tex = makeCheckTexture();
+	struct Mode { const char *name; bool atlas, elide; double ms = 0; unsigned draws = 0, binds = 0; };
+	Mode modes[3] = { { "separate eyes, ordinary world draw kept", false, false }, { "atlas, ordinary world draw kept", true, false }, { "atlas, ordinary world draw elided", true, true } };
+	for (Mode &m : modes) {
+		FrameTargets f;
+		if (!makeSlot(&f, 1024, 1024, m.atlas)) { check(false, "%s: slot created", m.name); continue; }
+		FrameOptions o; o.elide = m.elide; o.worldDraws = 200;
+		for (int i = 0; i < 4; ++i) runFrame(&f, o, tex); // warm up: shaders, layers, elision certification
+		const int frames = 20;
+		FrameResult last;
+		const auto t0 = std::chrono::steady_clock::now();
+		for (int i = 0; i < frames; ++i) last = runFrame(&f, o, tex);
+		const auto t1 = std::chrono::steady_clock::now();
+		m.ms = std::chrono::duration<double, std::milli>(t1 - t0).count() / frames;
+		m.draws = last.drawCalls; m.binds = last.bindCalls;
+		printf("  %-42s %7.2f ms/frame   GL draws/frame %4u   glBindFramebuffer/frame %4u\n", m.name, m.ms, m.draws, m.binds);
+	}
+	check(modes[1].binds < modes[0].binds, "atlas mode binds fewer framebuffers per frame than separate eyes (%u < %u)", modes[1].binds, modes[0].binds);
+	check(modes[2].draws < modes[1].draws, "elision submits fewer GL draws per frame (%u < %u)", modes[2].draws, modes[1].draws);
+	tex->Release();
+}
+
 static void caseApiSurface()
 {
 	printf("\n[case] API surface\n");
@@ -934,5 +964,6 @@ int RunDeviceCases(Harness *h, int *checks)
 	caseDXT();
 	caseFormats();
 	caseVaryingPrecision();
+	casePerf();
 	return g_failures;
 }
