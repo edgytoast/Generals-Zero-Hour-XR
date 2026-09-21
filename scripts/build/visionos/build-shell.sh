@@ -71,7 +71,7 @@ ENGINE_SLICE_DIR="xros-arm64-simulator"; ENGINE_FLAG="--simulator"; ENGINE_SLICE
 if [[ "$MODE" == "device" ]]; then ENGINE_SLICE_DIR="xros-arm64"; ENGINE_FLAG="--device"; ENGINE_SLICE_NAME="device"; fi
 export GX_ENGINE_XCFRAMEWORK="${GX_ENGINE_XCFRAMEWORK:-$GX_ENGINE_BUILD_ROOT/xcframework/GeneralsZHEngine.xcframework}"
 if [[ ! -f "$GX_ENGINE_XCFRAMEWORK/$ENGINE_SLICE_DIR/libGeneralsZHEngine_all.a" ]]; then
-  CMDS="scripts/build/visionos/build-engine.sh $ENGINE_FLAG && scripts/build/visionos/make-xcframework.sh $ENGINE_FLAG"
+  CMDS="scripts/build/visionos/build-engine.sh $ENGINE_FLAG && scripts/build/visionos/make-xcframework.sh"
   if [[ "$BUILD_ENGINE" == 0 ]]; then
     {
       echo "error: the engine library for the $ENGINE_SLICE_NAME slice is missing ($GX_ENGINE_XCFRAMEWORK/$ENGINE_SLICE_DIR)."
@@ -84,7 +84,7 @@ if [[ ! -f "$GX_ENGINE_XCFRAMEWORK/$ENGINE_SLICE_DIR/libGeneralsZHEngine_all.a" 
     exit 1
   fi
   echo "==> engine library for the $ENGINE_SLICE_NAME slice not found; building it first: $CMDS" >&2
-  ( cd "$ROOT" && scripts/build/visionos/build-engine.sh "$ENGINE_FLAG" && scripts/build/visionos/make-xcframework.sh "$ENGINE_FLAG" ) >&2
+  ( cd "$ROOT" && scripts/build/visionos/build-engine.sh "$ENGINE_FLAG" && scripts/build/visionos/make-xcframework.sh ) >&2   # no slice flag: merges every slice that has a build tree
   [[ -f "$GX_ENGINE_XCFRAMEWORK/$ENGINE_SLICE_DIR/libGeneralsZHEngine_all.a" ]] || { echo "error: the engine build did not produce $GX_ENGINE_XCFRAMEWORK/$ENGINE_SLICE_DIR" >&2; exit 1; }
 fi
 LDFLAGS_FILE="$GX_ENGINE_BUILD_ROOT/xcframework/$ENGINE_SLICE_NAME/link-flags.txt"
