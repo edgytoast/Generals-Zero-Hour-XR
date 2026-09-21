@@ -126,8 +126,8 @@ system device, so on visionOS the two are the same object (there is one GPU). Th
 and exposed as `GXXRBridgeStatus.devicesMatch`; see "Measured results". If they ever differ the ring textures could not
 be sampled by the compositor queue, so the check is a loud log line, not a silent assumption.
 
-**Confirmed by measurement (simulator, ANGLE 2.1.28778):** the two devices are the same object. The check is done
-by registry ID (`0x10000055b`), not by pointer, because `EGL_ANGLE_device_metal` returns the id ANGLE itself holds.
+**Confirmed by measurement (simulator, ANGLE 2.1.28778):** the two devices are the same object. The check accepts
+pointer equality or an equal `registryID` (`0x10000055b` here), so it is also true when two proxy objects refer to the same GPU.
 The textures the ring creates from ANGLE's device were sampled successfully by the compositor command buffer in every
 run. On a physical Vision Pro the same code path applies (`MTLCreateSystemDefaultDevice`, one GPU) but this has not
 been observed there.
@@ -318,7 +318,7 @@ Raw logs, CSVs and screenshots of these runs are kept by the package owner outsi
 | 349 s soak (ANGLE test scene, dedicated) | 21105 frames; `vmmap` physical footprint 43.2 MB at start, 45.3 MB after 23 s and 45.5 MB at the end (flat, +0.2 MB in the last 5 minutes); `ps` RSS fell from 289 MB to 141 MB (the simulator process is swapped and compressed; RSS is not a leak signal here); 0 GL errors, no `error` lines in the console |
 | Close / re-open cycles | `-cycleImmersive 6 -cycleHold 12`: 6 rounds plus the final re-open = 7 loop generations, every render loop exited cleanly, every ring reported `ring torn down (0 release timeouts over its life)` and every GL test scene `0 GL errors`; footprint 52.9 MB (generation 1) to 57.8 MB (generation 7), RSS falling. Seven cycles are too few to prove the +5 MB is not slow growth: treat it as "no large leak" |
 | Layouts | `dedicated` (default in the simulator soak), `shared` (60 fps, same picture), `shared` + `-angleAtlas` (60 fps, same picture; the simulator only has one view, so the atlas is exercised with one eye rect) |
-| Visual check | screenshots read back and looked at: ANGLE scene vs direct-Metal scene are pixel-for-pixel the same board, units, grid and shadow (only the animated orbiter cube differs); the UI panel quad shows the title bar with a live frame counter that matches the app's own frame count, and its red/green/blue/yellow corner markers are at top-left / top-right / bottom-right / bottom-left, i.e. correct orientation and no V flip |
+| Visual check | screenshots read back and looked at: ANGLE scene vs direct-Metal scene show the same board, units, grid and shadow at the same positions and colours by eye (only the animated orbiter cube differs; no numeric image diff was run); the UI panel quad shows the title bar with a live frame counter that matches the app's own frame count, and its red/green/blue/yellow corner markers are at top-left / top-right / bottom-right / bottom-left, i.e. correct orientation and no V flip |
 
 Not measured: GPU time, two-view stereo (the simulator hands out one view), a physical device, foveation (off by design),
 the engine itself (not attached yet).
