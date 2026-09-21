@@ -290,6 +290,13 @@ extension AppModel {
         setGameData(.importing(initial))
         print("[GameData] import start: zh=\(report.zhRoot) base=\(report.baseRoot)")
 
+        if let delay = LaunchOptions.importCancelAfterSeconds {
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                print("[GameData] -importCancelAfter: pressing Cancel")
+                self?.cancelImport()
+            }
+        }
         importTask = Task { [weak self] in
             let result = await Task.detached { () -> GXGDInstallResult in
                 GXGameDataService.installReport(report, token: token) { progress in

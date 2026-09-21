@@ -260,7 +260,8 @@ Details in the "Some required files are missing" state:
 * **Launch arguments** (simulator, CI): `-autoImmersive` (opens the tabletop with the built-in test
   scene, unchanged), `-allowNoData` (enables Enter Tabletop without data, test scene),
   `-importFrom <path>` (runs the flow on a folder without the picker), `-importBaseFrom <path>`,
-  `-importInPlace`, `-resetGameData` (removes the app's own imported copy and saved preferences).
+  `-importInPlace`, `-importCancelAfter <seconds>` (presses Cancel that long after an import starts),
+  `-resetGameData` (removes the app's own imported copy and saved preferences).
 * **Host tests.** `scripts/qa/vision-gamedata-test.sh` builds and runs the validator and importer
   tests with synthetic fixtures: the Android validator scenarios, the engine-parity BIGF checks, the
   import/resume/cancel/space/verification tests and a crash-injection matrix over every step of the

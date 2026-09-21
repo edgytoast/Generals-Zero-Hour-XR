@@ -6,6 +6,7 @@ import Foundation
 ///                           (simulator/CI; the simulator app can read host paths directly)
 ///   -importBaseFrom <path>  explicit separate base Generals folder for -importFrom
 ///   -importInPlace          with -importFrom: use the folder in place instead of copying
+///   -importCancelAfter <sec> test hook: press Cancel this many seconds after an import starts
 ///   -resetGameData          delete the imported copy and every saved data preference first
 ///                           (removes only the app's own imported files, never user sources)
 extension LaunchOptions {
@@ -13,6 +14,7 @@ extension LaunchOptions {
     static var importInPlace: Bool { arguments.contains("-importInPlace") }
     static var resetGameData: Bool { arguments.contains("-resetGameData") }
 
+    static var importCancelAfterSeconds: Double? { value(after: "-importCancelAfter").flatMap(Double.init) }
     static var importFromPath: String? { value(after: "-importFrom") }
     static var importBaseFromPath: String? { value(after: "-importBaseFrom") }
 
