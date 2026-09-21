@@ -565,6 +565,28 @@ static void testBoxSelect() {
 	CHECK(!s.bridge.of(C::SpatialPointer).back().f1);
 }
 
+static void testEyeOriginFromHand() {
+	// If the platform's pinch ray starts at the HAND instead of the eye, the amplification model must use the tracked head
+	// (a ray origin at the hand would make the head->hand direction degenerate).
+	Sim s;
+	const XrVector3f hand0 = H0();
+	const XrVector3f target = visionBoardToWorld(s.host.board, {-0.2f, 0.0f, 0});
+	s.begin(1, XR_HAND_RIGHT, target, hand0);
+	{
+		XrVector3f d = xrSub(target, hand0);
+		const float l = xrLength(d);
+		s.queue.back().ray_world.origin = {hand0.x, hand0.y, hand0.z};
+		s.queue.back().ray_world.direction = {d.x / l, d.y / l, d.z / l};
+	}
+	s.frame();
+	XrVector3f hand = hand0;
+	for (int i = 1; i <= 10; ++i) { hand = plus(hand0, 0.012f * i, 0, 0); s.move(1, XR_HAND_RIGHT, hand); s.frame(); }
+	CHECK(s.out.box.active);
+	const XrVector3f cursor = xrAdd(target, xrSub(planeHit(hand, 0.8f), planeHit(hand0, 0.8f)));
+	const XrVector3f cl = visionBoardToLocal(s.host.board, cursor);
+	NEAREPS(s.out.box.maxX, std::max(-0.2f, cl.x), 2e-3f);
+}
+
 static void testBoxAdditiveAndCancel() {
 	Sim s;
 	s.command(XR_CMD_SET_ADDITIVE, 1);
@@ -1236,6 +1258,31 @@ static void testGroundView() {
 		CHECK(s.out.mode == VisionMode::Select);
 		s.end(6, XR_HAND_RIGHT, hand);
 		s.frame();
+	}
+	// ---- gesture entry: a still pinch held on the pan handle arms Ground View; dragging it pans instead
+	{
+		Sim g;
+		const float hyy = 0.5625f * 0.5f;
+		g.beginAtBoard(1, XR_HAND_RIGHT, 0.0f, hyy + 0.03f, hand);
+		g.seconds(0.75);
+		CHECK(g.out.mode == VisionMode::CameraPan && g.out.ground.mode == XrObserverMode::Off);
+		CHECK(g.out.ground.holdProgress > 0.3f && g.out.ground.holdProgress < 0.7f);
+		g.seconds(1.0);
+		CHECK(g.out.ground.mode == XrObserverMode::Armed);
+		g.end(1, XR_HAND_RIGHT, hand); // the arming pinch is swallowed
+		g.frames(3);
+		CHECK(g.out.ground.mode == XrObserverMode::Armed && g.bridge.count(C::ObsPick) == 0);
+		Sim d;
+		d.beginAtBoard(1, XR_HAND_RIGHT, 0.0f, hyy + 0.03f, hand);
+		d.seconds(0.5);
+		d.move(1, XR_HAND_RIGHT, plus(hand, 0.05f, 0, 0));
+		d.seconds(1.5);
+		CHECK(d.out.ground.mode == XrObserverMode::Off && d.out.ground.holdProgress == 0);
+		Sim n;
+		n.bridge.canObserve = false;
+		n.beginAtBoard(1, XR_HAND_RIGHT, 0.0f, hyy + 0.03f, hand);
+		n.seconds(2.0);
+		CHECK(n.out.ground.mode == XrObserverMode::Off);
 	}
 	// ---- exit by command, cancel while armed, forced exit when the engine withdraws permission
 	{
@@ -1993,6 +2040,7 @@ int main() {
 	testAdditive();
 	testContextCommand();
 	testBoxSelect();
+	testEyeOriginFromHand();
 	testBoxAdditiveAndCancel();
 	testBoxClampedToBoard();
 	testRimPan();

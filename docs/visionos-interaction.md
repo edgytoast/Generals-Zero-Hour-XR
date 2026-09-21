@@ -86,7 +86,7 @@ bar in front of the near edge of the board.
 | Recenter button / `XR_CMD_RECENTER_BOARD` | - | board goes back 0.9 m ahead of the head, keeps its size; `XR_CMD_RESET_WORKSPACE` also restores the default size and zoom |
 | Building placement pending: pinch | the ground | the ghost jumps to the gaze target; dragging moves it; wrist twist rotates it; release confirms |
 | Placement: cancel | second-hand tap, SwiftUI cancel button, or look away from the board + pinch | `CancelTarget`; two consecutive confirms on illegal ground also cancel |
-| Ground View: button | - | arm; then look at visible open ground + pinch (tap) = teleport there; pinch again elsewhere = teleport again |
+| Ground View: button, or hold a still pinch on the rim for 1.5 s | - / the rim | arm (`ground.holdProgress` fills a ring); then look at visible open ground + pinch (tap) = teleport there; pinch again elsewhere = teleport again |
 | Ground View: leave | hold a still pinch for 1.2 s, or button, or engine refusal | back to the unchanged tabletop |
 | Look + pinch | the engine UI panel (control bar, dialogs) | pixel pointer through `Pointer`: hover, press one frame later, release one frame after that (a click) |
 | Look + pinch | the Commands console / button | host panel: hit table from `XrPanelLayout.h`; activation on release over the same control; tactic buttons call `TacticalAction` |
@@ -214,7 +214,7 @@ next frame: SpatialPointer(false), Pointer(false)
 
 `XrObserverState` (Quest) drives the state: `Off -> Armed -> Active -> Off`.
 
-1. Enter: command (only if `canObserveGround`); any pinch in flight is cancelled; the engine gets a neutral controller.
+1. Enter: command, or a still pinch held 1.5 s on the pan handle (only if `canObserveGround`); any pinch in flight is cancelled; the engine gets a neutral controller.
 2. Armed: tabletop gestures are off. While a pinch is held the engine's verdict on the gaze point is exposed
    (`ground.hasTarget/targetValid/targetRoom`, `PickObserverGround`). Release as a tap (< 0.6 s, < 2 cm): `PickObserverGround(board,
    gazeAim)`, then `observer.choose(ground, head, headYawForward)`; the ground plane is anchored 1.65 m below the head.
@@ -277,7 +277,7 @@ engine object-id buffer mapped to tracking-area values; that is not available an
 `initialDistanceM 0.9`, `workspaceOneHandGain 1.5`, distance/height clamps), camera (`panChunk 0.05`, `rotateSign -1`,
 `rotateDeadzoneRad 3 deg`, `zoomDeadzone 0.06`, `zoomMin/Max 0.5/3.0`), placement (`twistDeadzoneRad 8 deg`, `twistSign`,
 `twistAxis 2`, `invalidConfirmCancelsAfter 2`, `missCancelsPlacement`), Ground View (`groundTapMaxSeconds 0.6`,
-`groundExitHoldSeconds 1.2`, `comfortFadeSeconds 0.18`, `teleportMaxMetres 6`, `teleportStepUnits 1.8`), simulator
+`groundExitHoldSeconds 1.2`, `groundEnterHoldSeconds 1.5`, `comfortFadeSeconds 0.18`, `teleportMaxMetres 6`, `teleportStepUnits 1.8`), simulator
 (`emulateSecondHandWithOption`, `simSecondHandSeparationM 0.30`), `applyCommandActions`.
 
 ## 7. Engine bridge table (package C)

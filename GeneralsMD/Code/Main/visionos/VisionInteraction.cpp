@@ -455,6 +455,9 @@ bool VisionInteraction::beginPointer(const XRInteractionEvent &ev) {
 		const XrVector3f o = fromXR(ev.ray_world.origin), d = norm3(fromXR(ev.ray_world.direction));
 		if (finite3(o) && xrLength(d) > 0.5f) { p->hasRay = true; p->rayO = o; p->rayD = d; }
 	}
+	// The amplification model needs the EYE as its origin. If the platform's ray starts at the head use it, otherwise
+	// (a ray that starts at the hand) use the tracked head so the head->hand direction never degenerates.
+	p->eye = p->hasRay && xrLength(xrSub(p->rayO, host_.head.position)) < 0.25f ? p->rayO : host_.head.position;
 	if (modifiers_ & XR_MOD_OPTION) { /* simulated second hand spawns after the first is classified */ }
 
 	Ptr *primary = other(p);
@@ -774,7 +777,7 @@ void VisionInteraction::makeCursor(Ptr &p, XrVector3f planeP, XrVector3f planeN,
 		c.direct = true;
 		c.start = xrSub(p.pos0, xrScale(planeN, xrDot(xrSub(p.pos0, planeP), planeN)));
 	} else {
-		c.origin = p.hasRay ? p.rayO : host_.head.position;
+		c.origin = p.eye;
 		XrVector3f dir = xrSub(p.pos0, c.origin);
 		const float len = xrLength(dir);
 		if (len >= cfg_.minHeadHandDistanceM && std::isfinite(len)) {
@@ -929,6 +932,7 @@ void VisionInteraction::beginTwoCamera(Ptr &a, Ptr &b) {
 	// Midpoint cursor: head->midpoint ray amplification on the board plane (no gaze needed).
 	Ptr tmp;
 	tmp.pos0 = tmp.pos = two_.mid0;
+	tmp.eye = host_.head.position;
 	tmp.kind = XR_POINTER_INDIRECT_PINCH;
 	tmp.hasRay = false;
 	makeCursor(tmp, board_.pose.position, xrRotate(board_.pose.orientation, {0, 0, 1}), board_.pose.position);
@@ -1064,7 +1068,7 @@ void VisionInteraction::activatePanel(Ptr &p) {
 
 // Converts a cursor point on the board plane into a PickWorld result along the eye->cursor ray.
 bool VisionInteraction::pickCursor(Ptr &p, XrVector3f planePoint, XrWorldHit &hit) {
-	const XrVector3f origin = p.hasRay ? p.rayO : host_.head.position;
+	const XrVector3f origin = p.eye;
 	const XrVector3f dir = norm3(xrSub(planePoint, origin));
 	if (xrLength(dir) < 0.5f) return false;
 	return enginePick(visionAimFromRay(origin, dir), hit);
@@ -1200,6 +1204,18 @@ void VisionInteraction::releaseBox(Ptr &p) {
 
 void VisionInteraction::tickPan(Ptr &p) {
 	if (!host_.engine.canAdjustWorld) { p.role = Role::Consumed; return; }
+	// Gesture entry to Ground View: a still pinch held on the pan handle. Dragging it is a pan, so no conflict.
+	if (cfg_.groundEnterHoldSeconds > 0 && host_.engine.canObserveGround && observer_.mode == XrObserverMode::Off &&
+		p.travel < cfg_.dragThresholdM) {
+		const double held = host_.time_s - p.hostBegin;
+		holdProgress_ = clampf(float(held / cfg_.groundEnterHoldSeconds), 0.0f, 1.0f);
+		if (held >= cfg_.groundEnterHoldSeconds) {
+			holdProgress_ = 0;
+			p.role = Role::Consumed; // the pinch that armed it must not act again on release
+			handleCommand(XR_CMD_ENTER_GROUND_VIEW, 0);
+			return;
+		}
+	} else if (p.travel >= cfg_.dragThresholdM) holdProgress_ = 0;
 	p.cursorPoint = cursorPoint(p, p.cursor);
 	cursorVisible_ = true;
 	cursorWorld_ = p.cursorPoint;
