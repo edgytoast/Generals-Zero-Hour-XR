@@ -67,7 +67,7 @@ enum {
 void GXAudio_SetMasterVolume(float volume);            // scales every category (AL listener gain)
 float GXAudio_GetMasterVolume(void);
 void GXAudio_SetCategoryVolume(int category, float volume);
-float GXAudio_GetCategoryVolume(int category);         // last value set by the host, or the engine's value when never set
+float GXAudio_GetCategoryVolume(int category);         // the engine's current system volume (options slider or host, last writer wins)
 
 // ---- Lifecycle --------------------------------------------------------------------------------------------------
 // Called by the host from any thread on interruption began, app backgrounded, immersive space closed, ... The output

@@ -268,6 +268,9 @@ protected:
 	void gxApplyHostAudio(void);                                         ///< engine thread, start of update()
 	void gxApplyDistanceModel(ALuint source, const AudioEventRTS *event); ///< tabletop range/rolloff for one positional source
 	void gxRetuneAllSources(bool tabletop);                              ///< re-apply the range model to every playing 3D source
+public:
+	Real gxGetSystemVolume(int category) const;                          ///< the "system" (options slider) volume of a GXAUDIO_CATEGORY_*
+protected:
 	unsigned m_gxHostGeneration = 0;
 	bool m_gxHostWasActive = false;
 	unsigned m_gxBinauralGeneration = 0;

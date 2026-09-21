@@ -3520,6 +3520,18 @@ void OpenALAudioManager::gxRetuneAllSources(bool tabletop)
 }
 
 //-------------------------------------------------------------------------------------------------
+Real OpenALAudioManager::gxGetSystemVolume(int category) const
+{
+	switch (category) {
+	case GXAUDIO_CATEGORY_MUSIC:  return m_systemMusicVolume;
+	case GXAUDIO_CATEGORY_SPEECH: return m_systemSpeechVolume;
+	case GXAUDIO_CATEGORY_SFX_2D: return m_systemSoundVolume;
+	case GXAUDIO_CATEGORY_SFX_3D: return m_systemSound3DVolume;
+	}
+	return 0.0f;
+}
+
+//-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::gxApplyHostAudio(void)
 {
 	// Host mixer volumes: the same "system" volumes the in-game options sliders set, so script volumes keep multiplying.
@@ -3614,15 +3626,12 @@ float GXAudio_GetCategoryVolume(int category)
 	if (category < 0 || category >= GXAUDIO_CATEGORY_COUNT) {
 		return 0.0f;
 	}
-	if (s_gxHostMix.categoryWasSet(category)) {
-		return s_gxHostMix.category(category);
-	}
+	// The engine's own system volume is the truth: the in-game options slider and the host both write it, last writer wins.
 	OpenALAudioManager* mgr = s_gxManager.load();
-	if (!mgr) {
-		return 1.0f;
+	if (mgr) {
+		return mgr->gxGetSystemVolume(category);
 	}
-	static const AudioAffect kAffect[GXAUDIO_CATEGORY_COUNT] = { AudioAffect_Music, AudioAffect_Speech, AudioAffect_Sound, AudioAffect_Sound3D };
-	return mgr->getVolume(kAffect[category]);
+	return s_gxHostMix.categoryWasSet(category) ? s_gxHostMix.category(category) : 1.0f;
 }
 
 void GXAudio_EnginePause(void)
