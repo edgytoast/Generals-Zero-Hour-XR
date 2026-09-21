@@ -35,13 +35,15 @@
  * - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - */
 
 #include "render2dsentence.h"
+// GeneralsX @feature visionOS port: GX_XR_HOST / GX_USES_D3D8GLES replace the bare __ANDROID__ tests below.
+#include "gx_backend.h"
 #include "surfaceclass.h"
 #include "texture.h"
 #include "wwprofile.h"
 #include "wwmemlog.h"
 #include "dx8wrapper.h"
 #include "GXTrace.h"
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 // GeneralsX @perf Android port 09/05/2026 - draw-category / UI-timing hooks
 #include "d3d8gles.h"
 #include <chrono>
@@ -475,7 +477,7 @@ Render2DSentenceClass::Release_Pending_Surfaces ()
 void
 Render2DSentenceClass::Build_Textures ()
 {
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 	struct GxUiTimer {
 		std::chrono::steady_clock::time_point t0;
 		int bucket;
@@ -1421,7 +1423,7 @@ Vector2	Render2DSentenceClass::Build_Sentence_Not_Centered (const WCHAR *text, i
 void
 Render2DSentenceClass::Build_Sentence (const WCHAR *text, int *hkX, int *hkY)
 {
-#if defined(__ANDROID__)
+#if defined(GX_USES_D3D8GLES)
 	struct GxUiTimer {
 		std::chrono::steady_clock::time_point t0;
 		int bucket;
@@ -1973,6 +1975,7 @@ FontCharsClass::Update_Current_Buffer (int char_width)
 
 #if defined(SAGE_USE_FREETYPE) && !defined(_WIN32)
 
+// GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT): visionOS has no fontconfig either; fonts resolve from a bundled fonts/ directory next to the game data (the host stages an Arial-compatible face, never a copyrighted retail font).
 #if (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE) || defined(__ANDROID__)
 
 #include <cctype>

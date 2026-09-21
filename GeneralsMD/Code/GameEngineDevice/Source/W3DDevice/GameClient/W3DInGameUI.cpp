@@ -28,6 +28,8 @@
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 
 #include <stdlib.h>
+// GeneralsX @feature visionOS port: GX_XR_HOST / GX_USES_D3D8GLES replace the bare __ANDROID__ tests below.
+#include "gx_backend.h"
 #include <cmath>
 #include "Common/BuildAssistant.h"
 
@@ -54,7 +56,7 @@
 
 #include "Common/UnitTimings.h" //Contains the DO_UNIT_TIMINGS define jba.
 
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 // GeneralsX @feature Codex 14/09/2026 No cached ghost pointers or new orders.
 // Zero delta queries availability; line construction keeps native semantics.
 bool W3DInGameUI::rotateXrPlacement(float radians)
@@ -303,7 +305,7 @@ W3DInGameUI::W3DInGameUI()
 //-------------------------------------------------------------------------------------------------
 W3DInGameUI::~W3DInGameUI()
 {
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 	clearXrAttackHint();
 #endif
 	Int i;
@@ -398,7 +400,7 @@ void W3DInGameUI::update()
 //-------------------------------------------------------------------------------------------------
 void W3DInGameUI::reset()
 {
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 	clearXrAttackHint();
 #endif
 
@@ -445,7 +447,7 @@ void W3DInGameUI::draw()
 
 	// repaint all our windows
 	// GeneralsX @feature Codex 13/09/2026 Snapshot world once, then mirror UI draws via MRT.
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 	extern bool GX_XR_SplitUIAllowed();
 	extern bool GX_XR_BeginUILayer();
 	if(GX_XR_SplitUIAllowed()) {
@@ -624,7 +626,7 @@ void W3DInGameUI::drawMoveHints( View *view )
 //-------------------------------------------------------------------------------------------------
 void W3DInGameUI::drawAttackHints( View *view )
 {
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 	extern bool GX_XR_WorldRequested();
 	const Int elapsed=TheGameClient->getFrame()-m_xrAttackFrame;
 	if(!GX_XR_WorldRequested() || elapsed<0 || elapsed>32) {clearXrAttackHint();return;}
@@ -643,7 +645,7 @@ void W3DInGameUI::drawAttackHints( View *view )
 #endif
 }
 
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 // GeneralsX @feature Codex 13/09/2026 Red terrain-following attack feedback.
 void W3DInGameUI::clearXrAttackHint() {
 	for(auto *&line:m_xrAttackRing) {if(line) line->Remove();REF_PTR_RELEASE(line);}

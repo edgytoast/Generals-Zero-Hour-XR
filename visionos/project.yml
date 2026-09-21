@@ -21,10 +21,12 @@ settings:
     CLANG_ENABLE_OBJC_ARC: YES
     CLANG_ENABLE_MODULES: YES
     GCC_C_LANGUAGE_STANDARD: gnu17
-    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: NO   # the ANGLE check/embed scripts read outside the project
     CODE_SIGN_STYLE: Automatic
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
+    ARCHS: arm64                 # ANGLE (and the engine) are built for arm64 only; no x86_64 simulator slice
+    ONLY_ACTIVE_ARCH: NO
 targets:
   GeneralsZHXR:
     type: application
@@ -33,6 +35,7 @@ targets:
       - path: App
       - path: Bridge
       - path: Renderer
+      - path: ANGLE
       - path: Input
       - path: Platform
         buildPhase: none        # headers only; referenced through HEADER_SEARCH_PATHS
@@ -51,12 +54,25 @@ targets:
           - $(SRCROOT)/App
           - $(SRCROOT)/Bridge
           - $(SRCROOT)/Renderer
+          - $(SRCROOT)/ANGLE
           - $(SRCROOT)/Input
           - $(SRCROOT)/Platform
+          - $(GX_ANGLE_ROOT)/$(PLATFORM_NAME)/include
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_FILE: Resources/Info.plist
         GENERATE_INFOPLIST_FILE: NO
         MTL_ENABLE_DEBUG_INFO: INCLUDE_SOURCE
+        # ANGLE (GLES 3.0 on Metal), built by scripts/build/visionos/build-angle.sh. GX_ANGLE_ROOT is the
+        # install root containing xrsimulator/ and xros/ (each with include/ and lib/). The default is
+        # build-angle.sh's default install location; build-shell.sh passes $GX_ANGLE_ROOT through, and
+        # in the Xcode GUI it can be set as a user-defined build setting.
+        # GX_ANGLE_LINK: "static" (default; libANGLE.a + libtranslator.a linked into the executable, nothing
+        # to embed or sign) or "shared" (libANGLE-shared.dylib embedded in Frameworks/ and signed).
+        GX_ANGLE_ROOT: /Users/jvadala/CandC/deps/angle/install
+        GX_ANGLE_LINK: static
+        GX_ANGLE_LDFLAGS_static: "$(GX_ANGLE_ROOT)/$(PLATFORM_NAME)/lib/libANGLE.a $(GX_ANGLE_ROOT)/$(PLATFORM_NAME)/lib/libtranslator.a -lz -framework QuartzCore -framework CoreGraphics -framework IOSurface -framework Foundation"
+        GX_ANGLE_LDFLAGS_shared: "-L$(GX_ANGLE_ROOT)/$(PLATFORM_NAME)/lib -lANGLE-shared"
+        LD_RUNPATH_SEARCH_PATHS: "@executable_path/Frameworks"
         OTHER_LDFLAGS:
           - -framework
           - CompositorServices
@@ -64,6 +80,32 @@ targets:
           - ARKit
           - -framework
           - Metal
+          - "$(GX_ANGLE_LDFLAGS_$(GX_ANGLE_LINK))"
+    preBuildScripts:
+      - name: Check ANGLE
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          LIB="$GX_ANGLE_ROOT/$PLATFORM_NAME/lib"
+          if [ "$GX_ANGLE_LINK" = "shared" ]; then NEED="$LIB/libANGLE-shared.dylib"; else NEED="$LIB/libANGLE.a"; fi
+          if [ ! -f "$NEED" ] || [ ! -d "$GX_ANGLE_ROOT/$PLATFORM_NAME/include/EGL" ]; then
+            echo "error: ANGLE for $PLATFORM_NAME not found under GX_ANGLE_ROOT=$GX_ANGLE_ROOT (missing $NEED). Build it with: scripts/build/visionos/build-angle.sh all   (or set GX_ANGLE_ROOT to an existing install)" >&2
+            exit 1
+          fi
+    postBuildScripts:
+      - name: Embed ANGLE (shared link only)
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          [ "$GX_ANGLE_LINK" = "shared" ] || exit 0
+          SRC="$GX_ANGLE_ROOT/$PLATFORM_NAME/lib/libANGLE-shared.dylib"
+          DEST="$TARGET_BUILD_DIR/$FRAMEWORKS_FOLDER_PATH"
+          mkdir -p "$DEST"
+          cp -f "$SRC" "$DEST/libANGLE-shared.dylib"
+          # Re-sign with the app's identity (ad-hoc "-" on the simulator). Unsigned device builds skip signing.
+          if [ "$CODE_SIGNING_ALLOWED" != "NO" ] && [ -n "$EXPANDED_CODE_SIGN_IDENTITY" ]; then
+            /usr/bin/codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" --timestamp=none "$DEST/libANGLE-shared.dylib"
+          fi
     info:
       path: Resources/Info.plist
       properties:

@@ -78,6 +78,7 @@
 // both the window surface is owned by the OS while backgrounded (CAMetalLayer
 // on iOS, ANativeWindow on Android) — touching the GPU in that state kills the
 // app on resume.
+// GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT): SAGE_MOBILE_PLATFORM compiles the touch translator and lifecycle gate; inert without SDL finger events (XR input arrives through SDL3Mouse::addSDLEvent), but SDL3Mouse::touchSelecting()/sawRealMouse() need it.
 #if (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE) || defined(__ANDROID__)
 #define SAGE_MOBILE_PLATFORM 1
 #endif
@@ -1857,6 +1858,7 @@ void publishTouchDebug()
 // SCROLL_SCREENEDGE. Cancel only when NEITHER source is present.
 void enforceNoPointerScrollWithoutPointer()
 {
+// GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT): touch feedback only acts while a finger is down (s_touch), which the XR host never produces; harmless and needed to compile.
 #if defined(__ANDROID__) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
 	if (TheLookAtTranslator == nullptr) {
 		return;
@@ -1893,6 +1895,7 @@ void enforceNoPointerScrollWithoutPointer()
 // latched on a press and waited for a release to clear it.
 static void updateTouchTargetFeedback()
 {
+// GeneralsX @feature visionOS decision (TARGET_OS_IPHONE==1, site KEPT): touch feedback only acts while a finger is down (s_touch), which the XR host never produces; harmless and needed to compile.
 #if defined(__ANDROID__) || (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE)
 	if (TheInGameUI == nullptr || TheTacticalView == nullptr) {
 		return;

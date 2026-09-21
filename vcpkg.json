@@ -11,11 +11,11 @@
       },
       {
         "name": "fontconfig",
-        "platform": "!windows & !ios & !android"
+        "platform": "!windows & !ios & !android & !visionos"
       },
       {
         "name": "openal-soft",
-        "platform": "!windows",
+        "platform": "!windows & !visionos",
         "features": []
       },
       {
@@ -25,11 +25,11 @@
       },
       {
         "name": "gamenetworkingsockets",
-        "platform": "android"
+        "platform": "android | visionos"
       },
       {
         "name": "ffmpeg",
-        "platform": "ios | android",
+        "platform": "ios | android | visionos",
         "features": ["avcodec", "avformat", "swscale", "swresample"]
       },
       {

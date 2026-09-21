@@ -44,6 +44,11 @@ struct WebGLPipeline {
 	GLuint m_curFBO=0,m_offFBO=0,m_xrStereoFBO[2]={};
 	unsigned m_xrStereoDraws=0,m_xrStereoProbeWait=0,m_xrShadowDraws=0,m_xrEffectDraws=0,m_xrTerrainDraws=0,m_xrModelDraws=0;
 	unsigned m_xrRestores=0,m_xrRestoreCalls=0,m_perfDrawsThisFrame=0;
+	// GeneralsX @feature visionOS: production drawCommon now reads the per-eye viewport from
+	// m_xrEyeRect and can leave the eye FBO bound with host GL; this fixture models Android (m_hostGL=false).
+	bool m_hostGL=false,m_xrEyeFBOLeft=false;GLuint m_xrBoundEyeFBO=0;int m_xrEyeRect[2][4]={};
+	void leaveXRStereoFBO(){}
+	void setEyeRects(){for(int e=0;e<2;++e){m_xrEyeRect[e][0]=m_xrStereoAtlas ? e*m_xrStereoW:0;m_xrEyeRect[e][1]=0;m_xrEyeRect[e][2]=m_xrStereoW;m_xrEyeRect[e][3]=m_xrStereoH;}}
 	float m_xrCamera[16]={},m_xrBoard[16]={},m_xrEyeClip[2][16]={},m_xrStereoAspect=1;
 	ProgramInfo *getProgram(WebGLDevice *,unsigned,bool multiview=false){return multiview ? &multiviewProgram:&program;}
 	void applyUniforms(WebGLDevice *,ProgramInfo *p,unsigned){glUseProgram(p->prog);}
@@ -133,7 +138,7 @@ int main(){
 			WebGLPipeline p;p.program.prog=program;p.program.uXrActive=glGetUniformLocation(program,"xrMode");
 			p.m_xrElision.configure(reference>=5);
 			p.m_offFBO=fbo[0];p.m_xrStereoFBO[0]=fbo[1];p.m_xrStereoFBO[1]=fbo[2];p.m_xrUI=(scenario>>8)&1;
-			p.m_xrStereoAtlas=reference==2;if(p.m_xrStereoAtlas)p.m_xrStereoFBO[0]=fbo[3];
+			p.m_xrStereoAtlas=reference==2;if(p.m_xrStereoAtlas)p.m_xrStereoFBO[0]=fbo[3];p.setEyeRects();
 			p.program.uXrEyeClip=glGetUniformLocation(program,"eyeClip");
 			if(reference>=3){
 				p.m_xrStereoMultiview=true;p.m_xrMultiviewFBO=mf[0];p.m_xrStereoFBO[0]=mf[1];p.m_xrStereoFBO[1]=mf[2];
@@ -263,7 +268,7 @@ int main(){
 		const bool atlas=(order+(round%2))%2;WebGLPipeline p;p.program.prog=program;
 		p.program.uXrActive=glGetUniformLocation(program,"xrMode");p.program.uXrEyeClip=glGetUniformLocation(program,"eyeClip");
 		p.m_xrStereoAtlas=atlas;p.m_offFBO=fbo[0];p.m_xrStereoFBO[0]=fbo[atlas ? 3:1];p.m_xrStereoFBO[1]=fbo[2];
-		p.m_curRTHeight=1609;p.m_xrStereoW=1536;p.m_xrStereoH=1609;
+		p.m_curRTHeight=1609;p.m_xrStereoW=1536;p.m_xrStereoH=1609;p.setEyeRects();
 		for(int eye=0;eye<2;++eye)for(int k=0;k<16;++k)p.m_xrEyeClip[eye][k]=k%5==0 ? 1:0;
 		WebGLDevice d;d.vp={0,0,1536,1609,0,1};d.state[D3DRS_ZENABLE]=1;d.state[D3DRS_ZWRITEENABLE]=1;
 		d.state[D3DRS_ZFUNC]=D3DCMP_LESSEQUAL;d.state[D3DRS_COLORWRITEENABLE]=15;d.state[D3DRS_CULLMODE]=D3DCULL_NONE;

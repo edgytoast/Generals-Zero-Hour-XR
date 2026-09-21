@@ -316,6 +316,69 @@
             "environment": {
                 "PKG_CONFIG_PATH": ""
             }
+        },
+        {
+            "name": "visionos-base",
+            "hidden": true,
+            "inherits": "default-vcpkg",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "description": "Native visionOS port: builds ONLY the static engine library (target z_generals -> libGeneralsZHEngine.a) that the SwiftUI + Compositor Services host app links. Needs CMake >= 3.28, Xcode with the visionOS SDK, and a vcpkg checkout at $VCPKG_ROOT that supports visionOS; scripts/build/visionos/build-engine.sh sets everything up. Never build 'all': z_wwaudio (Miles) does not compile off Windows. The deployment target (2.0) is repeated in cmake/triplets/arm64-xros*.cmake; keep them in sync. RTS_GAMEMEMORY_ENABLE is OFF: the engine's pool allocator replaces global operator new/delete process-wide and would also catch the Swift/Objective-C runtime, OpenAL and FFmpeg allocations.",
+            "cacheVariables": {
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+                "CMAKE_SYSTEM_NAME": "visionOS",
+                "CMAKE_OSX_ARCHITECTURES": "arm64",
+                "CMAKE_OSX_DEPLOYMENT_TARGET": "2.0",
+                "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/cmake/triplets",
+                "VCPKG_OVERLAY_PORTS": "${sourceDir}/cmake/vcpkg-ports;${sourceDir}/cmake/vcpkg-ports-visionos",
+                "BUILD_SHARED_LIBS": "OFF",
+                "LIBTYPE": "STATIC",
+                "SAGE_BUILD_VISIONOS_LIB": "ON",
+                "SAGE_USE_DX8": "OFF",
+                "SAGE_USE_SDL3": "ON",
+                "SAGE_USE_OPENAL": "ON",
+                "SAGE_USE_GLM": "ON",
+                "SAGE_USE_MOLTENVK": "OFF",
+                "SAGE_UPDATE_CHECK": "OFF",
+                "RTS_CRASHDUMP_ENABLE": "OFF",
+                "RTS_BUILD_OPTION_FFMPEG": "ON",
+                "RTS_BUILD_OPTION_SAGE_PATCH": "OFF",
+                "RTS_BUILD_GENERALS": "OFF",
+                "RTS_BUILD_CORE_TOOLS": "OFF",
+                "RTS_BUILD_ZEROHOUR_TOOLS": "OFF",
+                "RTS_BUILD_ZEROHOUR_EXTRAS": "OFF",
+                "RTS_GAMEMEMORY_ENABLE": "OFF"
+            },
+            "environment": {
+                "PKG_CONFIG_PATH": ""
+            }
+        },
+        {
+            "name": "visionos-simulator",
+            "inherits": "visionos-base",
+            "displayName": "visionOS Simulator arm64 (static engine library)",
+            "cacheVariables": {
+                "CMAKE_OSX_SYSROOT": "xrsimulator",
+                "VCPKG_TARGET_TRIPLET": "arm64-xrsimulator"
+            },
+            "environment": {
+                "PKG_CONFIG_PATH": "",
+                "PKG_CONFIG_LIBDIR": "${sourceDir}/build/${presetName}/vcpkg_installed/arm64-xrsimulator/lib/pkgconfig"
+            }
+        },
+        {
+            "name": "visionos-device",
+            "inherits": "visionos-base",
+            "displayName": "visionOS Device arm64 (static engine library)",
+            "cacheVariables": {
+                "CMAKE_OSX_SYSROOT": "xros",
+                "VCPKG_TARGET_TRIPLET": "arm64-xros"
+            },
+            "environment": {
+                "PKG_CONFIG_PATH": "",
+                "PKG_CONFIG_LIBDIR": "${sourceDir}/build/${presetName}/vcpkg_installed/arm64-xros/lib/pkgconfig"
+            }
         }
     ],
     "buildPresets": [
@@ -421,6 +484,20 @@
             "configurePreset": "linux64-deploy",
             "displayName": "Build Linux 64-bit DXVK/SDL3/OpenAL Release",
             "description": "Build Linux 64-bit with DXVK graphics, SDL3 windowing, and OpenAL audio"
+        },
+        {
+            "name": "visionos-simulator",
+            "configurePreset": "visionos-simulator",
+            "displayName": "Build visionOS Simulator static engine library",
+            "description": "Builds target z_generals (libGeneralsZHEngine.a) for the visionOS Simulator",
+            "targets": ["z_generals"]
+        },
+        {
+            "name": "visionos-device",
+            "configurePreset": "visionos-device",
+            "displayName": "Build visionOS Device static engine library",
+            "description": "Builds target z_generals (libGeneralsZHEngine.a) for visionOS devices",
+            "targets": ["z_generals"]
         }
     ],
     "workflowPresets": [

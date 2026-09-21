@@ -33,6 +33,8 @@
 
 // USER INCLUDES //////////////////////////////////////////////////////////////
 #include "dx8wrapper.h"
+// GeneralsX @feature visionOS port: GX_XR_HOST / GX_USES_D3D8GLES replace the bare __ANDROID__ tests below.
+#include "gx_backend.h"
 #include "always.h"
 #include "GameClient/View.h"
 #include "WW3D2/camera.h"
@@ -73,7 +75,7 @@ void PrepareShadows()
 //DECLARE_PERF_TIMER(shadowsRender)
 void DoShadows(RenderInfoClass & rinfo, Bool stencilPass)
 {
-#ifdef __ANDROID__
+#ifdef GX_XR_HOST
 	// GeneralsX @feature Codex 13/09/2026 Tag projected AND volume/fill passes.
 	extern int GX_XR_ShadowCategory(int);
 	const int previous=GX_XR_ShadowCategory(5);

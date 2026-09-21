@@ -144,6 +144,15 @@ extern "C" bool d3d8gles_ShouldUseANGLE()
 	const char *v = getenv("GENERALSX_GLES_ANGLE");
 	return v != nullptr && strcmp(v, "0") != 0;
 }
+#else // !__ANDROID__
+// GeneralsX @feature visionOS port - the render-backend picker is Android-only (it reads
+// render_backend.cfg from the Android internal storage path and chooses between Vulkan/DXVK,
+// system GLES and ANGLE). Engine code guarded by GX_USES_D3D8GLES (dx8wrapper.cpp,
+// render2d.cpp, W3DSmudge.cpp) still calls both queries; off Android the answer is fixed:
+// the native GLES3 backend is the only backend, and it runs on whichever GL implementation the
+// XR host resolved (ANGLE-Metal on visionOS), so neither Vulkan nor "ANGLE mode" applies.
+extern "C" bool d3d8gles_ShouldUseVulkanBackend() { return false; }
+extern "C" bool d3d8gles_ShouldUseANGLE() { return false; }
 #endif // __ANDROID__
 
 // ---------------------------------------------------------------------------
@@ -2225,7 +2234,16 @@ extern "C" bool d3d8gles_BeginXRUI(bool elideWorldCopy) { return WebGLPipeline::
 extern "C" bool d3d8gles_XRSplitReady() { return WebGLPipeline::get()->xrSplitReady(); }
 extern "C" unsigned int d3d8gles_GetXRWorldTexture() { return WebGLPipeline::get()->xrWorldTexture(); }
 extern "C" bool d3d8gles_BeginXRStereo(int w,int h,const float *l,const float *r,const float *b,float a,const float *c,bool atlas,bool multiview) { return WebGLPipeline::get()->beginXRStereo(w,h,l,r,b,a,c,atlas,multiview); }
-extern "C" void d3d8gles_ConfigureXRMultiview(void *(*resolver)(const char *)) {WebGLPipeline::get()->configureXRMultiview(resolver);}
+extern "C" void d3d8gles_ConfigureXRMultiview(void *(*resolver)(const char *)) {
+	// GeneralsX @feature visionOS port: with a host GL resolver (ANGLE-Metal has no
+	// GL_OVR_multiview) or D3D8GLES_XRFLAG_NO_MULTIVIEW, the request is ignored so
+	// GXMultiview::available() stays false; Quest hosts never set either.
+	const D3D8GLES_XRConfig *cfg = d3d8gles_GetXRConfig();
+	if (cfg != nullptr && (cfg->getProcAddress != nullptr || (cfg->flags & D3D8GLES_XRFLAG_NO_MULTIVIEW))) resolver = nullptr;
+	WebGLPipeline::get()->configureXRMultiview(resolver);
+}
+// GeneralsX @feature visionOS port - see d3d8gles.h. Safe to call before the device exists.
+extern "C" void d3d8gles_SetXRHostTargets(const D3D8GLES_XRTargets *targets) {WebGLPipeline::get()->setXRHostTargets(targets);}
 extern "C" bool d3d8gles_XRStereoMultiview() {return WebGLPipeline::get()->xrStereoMultiview();}
 extern "C" bool d3d8gles_XRStereoAtlas() { return WebGLPipeline::get()->xrStereoAtlas(); }
 extern "C" void d3d8gles_EndXRStereo() { WebGLPipeline::get()->endXRStereo(); }

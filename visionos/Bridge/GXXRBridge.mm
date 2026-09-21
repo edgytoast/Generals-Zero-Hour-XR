@@ -21,6 +21,7 @@
 #import <QuartzCore/QuartzCore.h>
 #import <os/log.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -33,9 +34,14 @@
 #include "XRInteraction.h"
 #include "XRPresentation.h"
 
+#import "GXXRANGLEContext.h"
+#import "GXXRBridgeHost.h"
+#import "GXXRGLTestScene.h"
 #import "GXXRMetalRenderer.h"
+#import "GXXRTargetRing.h"
 #import "GXXRTestScene.h"
 #import "ShaderTypes.h"
+#include "GXXRD3D8GLES.h"
 
 // ---------------------------------------------------------------------------
 // Shared state
@@ -65,6 +71,8 @@ struct Shared {
     std::atomic<int> sessionState{XR_SESSION_IDLE};
     std::atomic<bool> recenterRequested{false};
     std::atomic<bool> optExternalEyeTextures{false};
+    std::atomic<bool> optAngleTestScene{false};
+    std::atomic<uint32_t> loopGeneration{0};
 
     bool placementValid = false;
     float worldFromBoard[16] = {};
@@ -162,6 +170,49 @@ simd_float4x4 Translation(float x, float y, float z) {
     return m;
 }
 
+// ---- ANGLE launch options (test/bring-up switches, read straight from the process arguments) ----
+
+struct AngleOptions {
+    bool testScene = false;
+    bool atlas = false;
+    bool forceGLFinish = false;
+    bool noUIPanel = false;
+    float eyeScale = 1.0f;
+    MTLPixelFormat format = MTLPixelFormatRGBA8Unorm;
+};
+
+const AngleOptions& LaunchAngleOptions() {
+    static AngleOptions o = [] {
+        AngleOptions r;
+        NSArray<NSString*>* a = NSProcessInfo.processInfo.arguments;
+        for (NSUInteger i = 0; i < a.count; ++i) {
+            NSString* arg = a[i];
+            NSString* next = i + 1 < a.count ? a[i + 1] : @"";
+            if ([arg isEqualToString:@"-angleTestScene"]) r.testScene = true;
+            else if ([arg isEqualToString:@"-angleAtlas"]) r.atlas = true;
+            else if ([arg isEqualToString:@"-angleNoUIPanel"]) r.noUIPanel = true;
+            else if ([arg isEqualToString:@"-angleSync"] && [next isEqualToString:@"glfinish"]) r.forceGLFinish = true;
+            else if ([arg isEqualToString:@"-angleEyeScale"]) r.eyeScale = std::max(0.1f, std::min(2.0f, next.floatValue));
+            else if ([arg isEqualToString:@"-angleTargetFormat"]) r.format = [next isEqualToString:@"bgra"] ? MTLPixelFormatBGRA8Unorm : MTLPixelFormatRGBA8Unorm;
+        }
+        return r;
+    }();
+    return o;
+}
+
+// Client registered through GXXRBridgeSetHostFrameClient (the engine bridge).
+id<GXXRHostFrameClient> gHostClient = nil;
+std::mutex gHostClientMutex;
+
+id<GXXRHostFrameClient> HostClient() {
+    std::lock_guard<std::mutex> lock(gHostClientMutex);
+    return gHostClient;
+}
+
+// One frame-loop thread at a time. The ANGLE context (and, later, the engine's GL objects) outlive
+// every loop, so a re-opened immersive space's loop must wait for the previous one to release it.
+std::mutex gLoopMutex;
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -221,9 +272,15 @@ void GXXRBridgeGetStatus(GXXRBridgeStatus* out) {
 void GXXRBridgeSetBoolOption(const char* key, bool value) {
     if (!key) return;
     if (strcmp(key, "externalEyeTextures") == 0) Sh().optExternalEyeTextures.store(value);
+    else if (strcmp(key, "angleTestScene") == 0) Sh().optAngleTestScene.store(value);
 }
 
 void GXXRBridgeRecenter(void) { XRPresentation_Recenter(); }
+
+void GXXRBridgeSetHostFrameClient(id<GXXRHostFrameClient> client) {
+    std::lock_guard<std::mutex> lock(gHostClientMutex);
+    gHostClient = client;
+}
 
 void GXXRBridgeNotifyLifecycle(int32_t event) { PlatformLifecycle_Notify((PlatformLifecycleEvent)event); }
 
@@ -254,6 +311,18 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
     id<MTLCommandQueue> _queue;
     GXXRMetalRenderer* _renderer;
     GXXRTestScene* _testScene;
+
+    // ANGLE (GLES 3.0 on Metal) path
+    GXXRANGLEContext* _angle;
+    GXXRTargetRing* _ring;
+    id<GXXRHostFrameClient> _glClient;
+    GXXRGLTestScene* _glScene;
+    bool _angleActive;
+    float _angleEyeScale;
+
+    // 1 s timing window (CPU ms, summed per frame)
+    double _accGL, _accSync, _accComposite, _accFrame;
+    uint64_t _accFrames;
 
     ar_session_t _arSession;
     ar_world_tracking_provider_t _worldProvider;
@@ -307,6 +376,7 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
     }
     const bool external = Sh().optExternalEyeTextures.load();
     _testScene = [[GXXRTestScene alloc] initWithRenderer:_renderer externalEyeTextures:external];
+    [self setUpANGLE];
 
     // Head tracking. World tracking needs the world-sensing usage string in Info.plist.
     if (ar_world_tracking_provider_is_supported()) {
@@ -339,12 +409,87 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
     return YES;
 }
 
+- (void)setUpANGLE {
+    const AngleOptions& opt = LaunchAngleOptions();
+    id<GXXRHostFrameClient> hostClient = HostClient();
+    if (!(hostClient || opt.testScene || Sh().optAngleTestScene.load())) return;
+    _angleEyeScale = opt.eyeScale;
+    GXXRANGLEContext* ctx = [GXXRANGLEContext sharedContext];
+    if (!ctx || ![ctx makeCurrent]) {
+        SetMessage("ANGLE unavailable; using the direct-Metal test scene (see log)");
+        fprintf(stderr, "[GXXR] ANGLE unavailable; falling back to the direct-Metal test scene\n");
+        return;
+    }
+    _angle = ctx;
+    const bool same = [ctx checkDeviceMatchesCompositorDevice:_device];
+    _ring = [[GXXRTargetRing alloc] initWithContext:ctx pixelFormat:opt.format slotCount:3];
+    _ring.forceGLFinish = opt.forceGLFinish;
+    _ring.atlas = opt.atlas;
+    if (!_ring) {
+        SetMessage("ANGLE target ring failed; using the direct-Metal test scene");
+        [ctx releaseCurrent];
+        _angle = nil;
+        return;
+    }
+    if (hostClient) {
+        _glClient = hostClient;
+        if ([hostClient respondsToSelector:@selector(hostDidAttachWithContext:ring:)]) [hostClient hostDidAttachWithContext:ctx ring:_ring];
+    } else {
+        _glScene = [[GXXRGLTestScene alloc] initWithContext:ctx ring:_ring];
+        if (!_glScene) {
+            SetMessage("GLES3 test scene failed to build; using the direct-Metal test scene");
+            [_ring teardown];
+            _ring = nil;
+            [ctx releaseCurrent];
+            _angle = nil;
+            return;
+        }
+        if (opt.noUIPanel) [_ring setSizeWidth:0 height:0 forTarget:D3D8GLES_XRT_UI];
+        _glClient = _glScene;
+    }
+    _angleActive = true;
+    Shared& s = Sh();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    s.status.angleActive = true;
+    s.status.devicesMatch = same;
+    snprintf(s.status.renderer, sizeof(s.status.renderer), "%s", ctx.rendererString.UTF8String);
+    snprintf(s.status.syncMode, sizeof(s.status.syncMode), "%s", _ring.usesSharedEventSync ? "metal-shared-event" : "glFinish");
+}
+
+- (void)tearDownANGLE {
+    if (!_angle) return;
+    [_angle makeCurrent];
+    if ([_glClient respondsToSelector:@selector(hostWillDetach)]) [_glClient hostWillDetach];
+    [_glScene teardown];
+    _glScene = nil;
+    _glClient = nil;
+    [_ring teardown];
+    _ring = nil;
+    [_angle releaseCurrent];
+    _angle = nil;
+    _angleActive = false;
+    Shared& s = Sh();
+    std::lock_guard<std::mutex> lock(s.mutex);
+    s.status.angleActive = false;
+}
+
 - (void)run {
+    // Only one loop at a time: a re-opened immersive space's loop waits here until the previous
+    // one has torn down its per-loop resources and released the process-wide ANGLE context.
+    std::lock_guard<std::mutex> loopLock(gLoopMutex);
     @autoreleasepool {
-        if (![self setUp]) {
+        if (_cancelled.load() || ![self setUp]) {
+            [self tearDownANGLE];
             SetSessionState(XR_SESSION_INVALIDATED);
             return;
         }
+        const uint32_t generation = Sh().loopGeneration.fetch_add(1) + 1;
+        {
+            Shared& s = Sh();
+            std::lock_guard<std::mutex> lock(s.mutex);
+            s.status.loopGeneration = generation;
+        }
+        fprintf(stderr, "[GXXR] render loop generation %u started (angle=%d)\n", generation, (int)_angleActive);
     }
     cp_layer_renderer_state lastState = (cp_layer_renderer_state)0;
     uint64_t frameCounter = 0;
@@ -377,7 +522,10 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
             }
             if (state == cp_layer_renderer_state_invalidated) break;
             if (state == cp_layer_renderer_state_paused) {
-                cp_layer_renderer_wait_until_running(_layer);
+                // No GL and no Metal work while paused. Poll instead of cp_layer_renderer_wait_until_running so a
+                // cancelled loop (immersive space closed and re-opened) can never hang a successor that is
+                // waiting for the ANGLE context.
+                [NSThread sleepForTimeInterval:0.02];
                 continue;
             }
 
@@ -435,11 +583,32 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
                 fprintf(stderr, "[GXXR] frame loop: fps=%.1f frames=%llu drawables=%zu views=%u layout=%s tracked=%d headY=%.2f fov(l,r,u,d)=(%.1f,%.1f,%.1f,%.1f) vp=%ux%u\n", fps,
                         (unsigned long long)presented, drawableCount, firstViewCount, LayoutName(_layout), (int)anyTracked,
                         _dbgHeadY, _dbgFovDeg[0], _dbgFovDeg[1], _dbgFovDeg[2], _dbgFovDeg[3], _dbgViewportW, _dbgViewportH);
+                if (_accFrames > 0) {
+                    const double n = (double)_accFrames;
+                    {
+                        Shared& s = Sh();
+                        std::lock_guard<std::mutex> lock(s.mutex);
+                        s.status.glSubmitMs = _accGL / n;
+                        s.status.syncWaitMs = _accSync / n;
+                        s.status.compositeMs = _accComposite / n;
+                        s.status.frameMs = _accFrame / n;
+                        s.status.releaseTimeouts = _ring ? _ring.releaseTimeouts : 0;
+                    }
+                    fprintf(stderr, "[GXXR] timing (CPU ms/frame over %llu frames): glSubmit=%.3f syncWait=%.3f composite=%.3f total=%.3f | angle=%d sync=%s ring=%.0fMB | %s\n",
+                            (unsigned long long)_accFrames, _accGL / n, _accSync / n, _accComposite / n, _accFrame / n, (int)_angleActive,
+                            _angleActive ? (_ring.usesSharedEventSync ? "metal-shared-event" : "glFinish") : "-",
+                            _ring ? (double)_ring.allocatedBytes / (1024.0 * 1024.0) : 0.0,
+                            _angleActive ? _angle.rendererString.UTF8String : "(direct Metal)");
+                    _accGL = _accSync = _accComposite = _accFrame = 0;
+                    _accFrames = 0;
+                }
                 windowStart = now;
                 windowFrames = 0;
             }
         }
     }
+
+    [self tearDownANGLE];
 
     if (_arRunning) {
         ar_session_stop(_arSession);
@@ -592,9 +761,22 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
         }
     }
 
+    const CFTimeInterval tFrame0 = CACurrentMediaTime();
     id<MTLCommandBuffer> cb = [_queue commandBuffer];
     cb.label = @"GXXR frame";
     info.command_buffer = (__bridge void*)cb;
+
+    // ---- ANGLE path: acquire a ring slot sized to the eye viewport before the client renders. ----
+    bool ringFrame = false;
+    double syncWaitMs = 0;
+    if (_angleActive && viewCount > 0) {
+        const XRRect& vp0 = info.eyes[0].viewport;
+        const int ew = std::max(64, (int)std::lround(vp0.width * _angleEyeScale));
+        const int eh = std::max(64, (int)std::lround(vp0.height * _angleEyeScale));
+        [_ring configureStereoEyeWidth:ew height:eh eyeCount:(int)viewCount];
+        ringFrame = [_ring beginFrame];
+        syncWaitMs += _ring.lastSyncWaitMs;
+    }
 
     // ---- Client callback (engine or the default test scene). ----
     XRFrameCallback userCb;
@@ -606,39 +788,97 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
     }
     memset(sh.submitted, 0, sizeof(sh.submitted));
     sh.inFrame = true;
+    const CFTimeInterval tGL0 = CACurrentMediaTime();
     XRFrameResult result = XR_FRAME_SKIP;
-    if (viewCount > 0) result = userCb ? userCb(userData, &info) : [_testScene renderFrame:&info];
+    if (viewCount > 0) {
+        if (userCb) result = userCb(userData, &info);
+        else if (_angleActive) result = ringFrame ? [_glClient renderFrame:&info] : XR_FRAME_SKIP;
+        else result = [_testScene renderFrame:&info];
+    }
     sh.inFrame = false;
+    double glFinishMs = 0;  // CPU wait inside endGLWork (glFinish fallback only)
+    if (ringFrame) {
+        [_ring endGLWork];  // glFlush + signal the slot's shared event (or glFinish fallback)
+        glFinishMs = _ring.lastSyncWaitMs - syncWaitMs;
+        syncWaitMs = _ring.lastSyncWaitMs;
+    }
+    const CFTimeInterval tGL1 = CACurrentMediaTime();
 
+    const CFTimeInterval tComp0 = CACurrentMediaTime();
     if (result == XR_FRAME_SUBMITTED_TEXTURES) {
-        // Composite the engine-supplied per-eye textures into the drawable.
+        if (ringFrame) [_ring encodeWaitForGLInto:cb];  // GPU-GPU: composite waits for ANGLE's work on this slot
+        NSArray<GXXRCompositeLayer*>* layers = nil;
+        if (ringFrame && [_glClient respondsToSelector:@selector(compositeLayersForFrame:)]) layers = [_glClient compositeLayersForFrame:&info];
+
+        // Constant reverse-Z depth for the engine image: the compositor needs depth for reprojection and
+        // system-window occlusion and the engine has no depth to share, so use the tabletop distance.
+        float wfb[16];
+        float hx = 0, hz = 0;
+        const bool hasBoard = XRPresentation_GetTabletopPlacement(wfb, &hx, &hz);
+
         std::set<uint32_t> composed;
         for (size_t vi = 0; vi < viewCount; ++vi) {
             if (!sh.submitted[vi]) continue;
             const XREyeView& e = info.eyes[vi];
             const XREyeSubmit& sub = sh.submits[vi];
+            id<MTLTexture> src = gSubmittedTexture[vi];
             uint32_t flags = 0;
             if (sub.flags & XR_SUBMIT_FLIP_Y) flags |= GXXR_COMPOSITE_FLIP_Y;
             if (!(sub.flags & XR_SUBMIT_PREMULTIPLIED_ALPHA)) flags |= GXXR_COMPOSITE_PREMULTIPLY;
+            if (![GXXRMetalRenderer isSRGBFormat:src.pixelFormat]) flags |= GXXR_COMPOSITE_SRGB_DECODE;  // gamma values in a UNORM target
+            simd_float4 uvRect = simd_make_float4(0, 0, 1, 1);
+            if (ringFrame && _ring.atlas) uvRect = simd_make_float4(0.5f * (float)vi, 0, 0.5f, 1);
+
+            float depthNdc = 0.0f;
+            if (hasBoard) {
+                const simd_float3 boardPos = simd_make_float3(wfb[12], wfb[13], wfb[14]);
+                const simd_float3 eyePos = simd_make_float3(e.pose.position.x, e.pose.position.y, e.pose.position.z);
+                const float dist = simd_length(boardPos - eyePos);
+                simd_float4x4 proj;
+                memcpy(&proj, e.clip_from_view, sizeof(proj));
+                const simd_float4 clip = simd_mul(proj, simd_make_float4(0, 0, -dist, 1));
+                if (clip.w > 1e-6f) depthNdc = std::min(1.0f, std::max(0.0f, clip.z / clip.w));
+            }
+
             const bool first = composed.insert((uint32_t)(e.texture_index << 16 | e.array_slice)).second;
             MTLViewport vp = {(double)e.viewport.x, (double)e.viewport.y, (double)e.viewport.width, (double)e.viewport.height, 0.0, 1.0};
-            [_renderer encodeCompositeInto:cb
-                                    source:gSubmittedTexture[vi]
-                                     flags:flags
-                                     color:(__bridge id<MTLTexture>)e.color_target
-                                colorSlice:e.array_slice
-                                     depth:(__bridge id<MTLTexture>)e.depth_target
-                                  viewport:vp
-                                     clear:first];
+            [_renderer encodeEyeCompositeInto:cb
+                                       source:src
+                                        flags:flags
+                                       uvRect:uvRect
+                                constantDepth:depthNdc
+                                        color:(__bridge id<MTLTexture>)e.color_target
+                                   colorSlice:e.array_slice
+                                        depth:(__bridge id<MTLTexture>)e.depth_target
+                                     viewport:vp
+                                        clear:first];
+            if (layers.count > 0) {
+                simd_float4x4 clipFromWorld;
+                memcpy(&clipFromWorld, e.clip_from_world, sizeof(clipFromWorld));
+                [_renderer encodeLayers:layers
+                                   into:cb
+                                  color:(__bridge id<MTLTexture>)e.color_target
+                             colorSlice:e.array_slice
+                                  depth:(__bridge id<MTLTexture>)e.depth_target
+                               viewport:vp
+                          clipFromWorld:clipFromWorld];
+            }
         }
+        if (ringFrame) [_ring encodeReleaseInto:cb];  // slot may be rewritten once the compositor read it
     } else if (result == XR_FRAME_SKIP && firstColor) {
         [_renderer encodeClearInto:cb color:firstColor colorSlice:firstSlice depth:firstDepth];
         (*skipped)++;
     }
+    const CFTimeInterval tComp1 = CACurrentMediaTime();
 
     cp_drawable_encode_present(drawable, cb);
     [cb commit];
     if (result != XR_FRAME_SKIP) (*presented)++;
+    _accGL += (tGL1 - tGL0) * 1000.0 - glFinishMs;
+    _accSync += syncWaitMs;
+    _accComposite += (tComp1 - tComp0) * 1000.0;
+    _accFrame += (CACurrentMediaTime() - tFrame0) * 1000.0;
+    _accFrames++;
     return tracked;
 }
 

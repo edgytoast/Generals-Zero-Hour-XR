@@ -5,6 +5,9 @@
 # system" for CMAKE_SYSTEM_NAME=Android; the patch teaches it to treat Android
 # as the Linux it is. Drop this overlay once a vcpkg pin ships a port/GNS
 # release that recognizes Android natively.
+#
+# GeneralsX @build visionOS port: also extended with a visionOS-only in-place
+# widening of the "Darwin" checks (see the block after vcpkg_from_github).
 vcpkg_from_github(
     OUT_SOURCE_PATH SOURCE_PATH
     REPO ValveSoftware/GameNetworkingSockets
@@ -14,6 +17,23 @@ vcpkg_from_github(
     PATCHES
         android-os-check.patch
 )
+
+# GeneralsX @build visionOS port: GNS's CMake only knows CMAKE_SYSTEM_NAME
+# "Darwin" (macOS). CMAKE_SYSTEM_NAME is "visionOS" for the xros / xrsimulator
+# triplets, so the configure aborts with "Could not identify your target
+# operating system". visionOS is Darwin as far as GNS's POSIX code is
+# concerned (verified: the library and its protobuf/abseil/openssl closure
+# compile and archive for arm64 xrsimulator). The two places that test for
+# Darwin (CMakeLists.txt and src/CMakeLists.txt) are widened in place. Guarded
+# on the visionOS triplet so the Android and desktop builds see the untouched
+# sources.
+if(VCPKG_TARGET_IS_VISIONOS)
+    foreach(gns_cmake "${SOURCE_PATH}/CMakeLists.txt" "${SOURCE_PATH}/src/CMakeLists.txt")
+        vcpkg_replace_string("${gns_cmake}"
+            "CMAKE_SYSTEM_NAME MATCHES Darwin"
+            "CMAKE_SYSTEM_NAME MATCHES \"Darwin|visionOS\"")
+    endforeach()
+endif()
 
 vcpkg_check_features(
     OUT_FEATURE_OPTIONS FEATURE_OPTIONS

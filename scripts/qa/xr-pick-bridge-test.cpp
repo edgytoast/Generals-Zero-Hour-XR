@@ -3,6 +3,9 @@
 #include <cstdio>
 #include <cstdlib>
 #define __ANDROID__ 1
+// The extracted W3DView code is guarded by GX_XR_HOST (Core/Libraries/Source/WWVegas/WWLib/gx_backend.h),
+// which is 1 on Android; define it the same way here.
+#define GX_XR_HOST 1
 using Bool=bool;using Int=int;
 constexpr int WIN_STATUS_SEE_THRU=1,COLL_TYPE_ALL=0;
 struct ICoord2D{int x,y;};
