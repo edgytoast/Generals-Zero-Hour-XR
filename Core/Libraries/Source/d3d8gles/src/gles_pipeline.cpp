@@ -363,6 +363,9 @@ bool WebGLPipeline::initContextExternal(int w, int h)
 	m_hasS3TC = extensions != nullptr &&
 		(strstr(extensions, "GL_EXT_texture_compression_s3tc") != nullptr ||
 		 strstr(extensions, "GL_EXT_texture_compression_dxt1") != nullptr);
+	// GeneralsX @test visionOS port: force the software BC1-3 decode on a GPU that does expose S3TC
+	// (a macOS ANGLE, a desktop GL), so the path ANGLE-Metal on visionOS always takes can be tested there.
+	if (getenv("D3D8GLES_DISABLE_S3TC") != nullptr) m_hasS3TC = false;
 
 	m_fbWidth = w;
 	m_fbHeight = h;
@@ -532,6 +535,9 @@ bool WebGLPipeline::initContext(int w, int h, SDL_Window *window)
 	m_hasS3TC = extensions != nullptr &&
 		(strstr(extensions, "GL_EXT_texture_compression_s3tc") != nullptr ||
 		 strstr(extensions, "GL_EXT_texture_compression_dxt1") != nullptr);
+	// GeneralsX @test visionOS port: force the software BC1-3 decode on a GPU that does expose S3TC
+	// (a macOS ANGLE, a desktop GL), so the path ANGLE-Metal on visionOS always takes can be tested there.
+	if (getenv("D3D8GLES_DISABLE_S3TC") != nullptr) m_hasS3TC = false;
 
 	m_fbWidth = w;
 	m_fbHeight = h;
@@ -3065,7 +3071,10 @@ bool WebGLPipeline::beginXRStereo(int width,int height,const float *left,const f
 			destroyXRStereo();m_xrStereoW=hs.eyeW;m_xrStereoH=hs.eyeH;m_xrStereoAtlas=hs.atlas;
 			m_xrStereoHost=true;m_xrStereoTexW=hs.texW;m_xrStereoTexH=hs.texH;
 			GLint maxTexture=0,maxBuffer=0;glGetIntegerv(GL_MAX_TEXTURE_SIZE,&maxTexture);glGetIntegerv(GL_MAX_RENDERBUFFER_SIZE,&maxBuffer);
-			if(hs.texW>maxTexture || hs.texH>maxTexture || hs.texW>maxBuffer || hs.texH>maxBuffer) return false;
+			if(hs.texW>maxTexture || hs.texH>maxTexture || hs.texW>maxBuffer || hs.texH>maxBuffer) {
+				m_hostBadName[D3D8GLES_XRT_STEREO_LEFT]=hs.tex[0];if(!hs.atlas) m_hostBadName[D3D8GLES_XRT_STEREO_RIGHT]=hs.tex[1];
+				return false; // never retry these names (the caller falls back to backend targets)
+			}
 			const int targets=hs.atlas ? 1:2;
 			glGenFramebuffers(targets,m_xrStereoFBO);glGenRenderbuffers(targets,m_xrStereoDepth);
 			bool complete=true;
