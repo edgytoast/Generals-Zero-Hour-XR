@@ -546,6 +546,15 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
             cp_frame_start_submission(frame);
             cp_drawable_array_t drawables = cp_frame_query_drawables(frame);
             const size_t drawableCount = drawables ? cp_drawable_array_get_count(drawables) : 0;
+            if (drawableCount == 0) {
+                // The frame is no longer valid (the layer was invalidated or paused between the state check and
+                // here, which is exactly what closing the immersive space does). Compositor Services aborts the
+                // process with "BUG IN CLIENT: cp_frame_end_submission() failed because the frame is not valid"
+                // if a frame without drawables is ended, so drop it and let the state check at the top of the
+                // loop see the invalidation.
+                [NSThread sleepForTimeInterval:0.001];
+                continue;
+            }
             uint32_t firstViewCount = 0;
             bool anyTracked = false;
 
