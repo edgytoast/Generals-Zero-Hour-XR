@@ -37,6 +37,7 @@ targets:
       - path: Renderer
       - path: ANGLE
       - path: Input
+      - path: GameData
       - path: Platform
         buildPhase: none        # headers only; referenced through HEADER_SEARCH_PATHS
       - path: Resources
@@ -56,6 +57,7 @@ targets:
           - $(SRCROOT)/Renderer
           - $(SRCROOT)/ANGLE
           - $(SRCROOT)/Input
+          - $(SRCROOT)/GameData
           - $(SRCROOT)/Platform
           - $(GX_ANGLE_ROOT)/$(PLATFORM_NAME)/include
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
