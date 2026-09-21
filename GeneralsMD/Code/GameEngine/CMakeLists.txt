@@ -1242,7 +1242,9 @@ target_link_libraries(z_gameengine PUBLIC CURL::libcurl)
 # steamwebrtc/webrtc-lite binary is needed -- upstream's Windows build predates
 # that and still vendors webrtc-lite.lib. Our static triplet exports the _s
 # target (which also injects STEAMNETWORKINGSOCKETS_STATIC_LINK for consumers).
-if(ANDROID)
+# GeneralsX @build visionOS port: also wired for visionOS (GNS built through the vcpkg
+# overlay port for arm64-xros / arm64-xrsimulator, see cmake/vcpkg-ports).
+if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "visionOS")
     find_package(GameNetworkingSockets CONFIG REQUIRED)
     if(TARGET GameNetworkingSockets::GameNetworkingSockets_s)
         target_link_libraries(z_gameengine PUBLIC GameNetworkingSockets::GameNetworkingSockets_s)
@@ -1299,6 +1301,8 @@ add_compile_definitions(GENERALS_ONLINE)
 # error: 'steam/steamnetworkingsockets.h' file not found" on macOS. Match the
 # same if(ANDROID) guard as the library link until GNS is wired for desktop
 # too.
-if(ANDROID)
+# GeneralsX @build visionOS port: visionOS links GNS as well (see above), so it gets the
+# same transport define.
+if(ANDROID OR CMAKE_SYSTEM_NAME STREQUAL "visionOS")
     add_compile_definitions(GENERALS_ONLINE_ENABLE_P2P_TRANSPORT)
 endif()
