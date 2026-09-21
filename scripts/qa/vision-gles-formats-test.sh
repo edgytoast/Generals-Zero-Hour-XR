@@ -21,7 +21,7 @@ src=Core/Libraries/Source/d3d8gles/src/gles_pipeline.cpp
   sed -n '/^static bool prepareLevelUpload(/,/^}/p' "$src"
 } > "$test_dir/production.inc"
 test -s "$test_dir/production.inc"
-"${CXX:-clang++}" -std=c++20 -Wall -Wextra -Wno-unused-parameter -Wno-macro-redefined -fsanitize=undefined \
+"${CXX:-clang++}" -std=c++20 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-macro-redefined -fsanitize=undefined \
   -I"$test_dir" -I"$angle_inc" -I"$dxvk/include/native" -I"$dxvk/include/native/windows" -I"$dxvk/include/native/directx" \
   -IGeneralsMD/Code/CompatLib/Include -IGenerals/Code/CompatLib/Include -IDependencies/Utility -ICore/Libraries/Include \
   -ICore/Libraries/Source/WWVegas/WWLib -D_UNIX -DWIN32_LEAN_AND_MEAN \

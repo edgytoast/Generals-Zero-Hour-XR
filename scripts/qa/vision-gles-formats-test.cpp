@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <vector>
 
 #define WARN_ONCE(flagvar, ...) do { static bool flagvar = false; if (!flagvar) { flagvar = true; } } while (0)
@@ -137,6 +138,21 @@ int main()
 	{
 		UploadDesc u; const uint8_t z[4] = {};
 		check(!prepareLevelUpload(D3DFMT_R8G8B8, 1, 1, z, 4, false, &u), "an unimplemented format is reported (magenta upload), never silently mis-decoded");
+	}
+
+	// ---- cost of the software decode (the only DXT path on ANGLE-Metal); indicative host numbers ----
+	{
+		const unsigned side = 1024;
+		std::vector<uint8_t> src((size_t)side / 4 * (side / 4) * 16);
+		for (size_t i = 0; i < src.size(); ++i) src[i] = (uint8_t)(i * 2654435761u >> 13);
+		for (D3DFORMAT f : { D3DFMT_DXT1, D3DFMT_DXT5 }) {
+			const size_t bytes = (size_t)side / 4 * (side / 4) * (f == D3DFMT_DXT1 ? 8 : 16);
+			UploadDesc u; unsigned sink = 0; const int reps = 20;
+			const auto t0 = std::chrono::steady_clock::now();
+			for (int r = 0; r < reps; ++r) { prepareLevelUpload(f, side, side, src.data(), bytes, false, &u); sink += u.pixels[(size_t)r * 4099 % (side * side * 4)]; }
+			const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / reps;
+			printf("  software %s decode of one %ux%u level: %.2f ms (%.0f MB/s of RGBA out) [sink %u]\n", f == D3DFMT_DXT1 ? "DXT1" : "DXT5", side, side, ms, side * side * 4 / 1e6 / (ms / 1e3), sink & 1);
+		}
 	}
 	printf("%s: %d checks, %d failures\n", failures ? "FAILED" : "PASSED", checks, failures);
 	return failures ? 1 : 0;
