@@ -261,4 +261,15 @@ protected:
 	ALCdevice *m_alcDevice = nullptr;
 	ALCcontext *m_alcContext = nullptr;
 	OpenALAudioStream* m_binkAudio = nullptr;
+
+#if defined(GX_PLATFORM_VISIONOS)
+	// GeneralsX @feature visionOS audio: host-driven tabletop listener, mixer volumes, HRTF mode and lifecycle pause
+	// (see visionos/Audio/GXAudioListener.h and docs/visionos-audio.md). Not compiled on any other platform.
+	void gxApplyHostAudio(void);                                         ///< engine thread, start of update()
+	void gxApplyDistanceModel(ALuint source, const AudioEventRTS *event); ///< tabletop range/rolloff for one positional source
+	void gxRetuneAllSources(bool tabletop);                              ///< re-apply the range model to every playing 3D source
+	unsigned m_gxHostGeneration = 0;
+	bool m_gxHostWasActive = false;
+	unsigned m_gxBinauralGeneration = 0;
+#endif
 };

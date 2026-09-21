@@ -69,6 +69,30 @@
 
 #include <AL/alext.h>
 
+#if defined(GX_PLATFORM_VISIONOS)
+// GeneralsX @feature visionOS audio: host-driven tabletop listener, mixer volumes and lifecycle pause for the native
+// Apple Vision Pro port. Everything below is compiled ONLY for visionOS; desktop, Android and iOS are untouched.
+// The header-only state and math live in visionos/Audio (documented in docs/visionos-audio.md).
+#include <AL/efx.h>
+#include "../../../../visionos/Audio/GXAudioHostState.h"
+#include "../../../../visionos/Audio/GXAudioListener.h"
+#include "GameLogic/GameLogic.h"
+#include <atomic>
+
+#ifndef AL_METERS_PER_UNIT
+#define AL_METERS_PER_UNIT 0x20004
+#endif
+
+namespace
+{
+	gxaudio::HostListenerState s_gxHostListener;
+	gxaudio::HostMixState s_gxHostMix;
+	gxaudio::HostPauseState s_gxHostPause;
+	std::atomic<ALCdevice*> s_gxDevice(nullptr);            // valid between openDevice() and closeDevice()
+	std::atomic<OpenALAudioManager*> s_gxManager(nullptr);  // valid between the constructor and the destructor
+}
+#endif
+
 // GeneralsX @bugfix 14/06/2026 Self-heal for stuck "disallow speech" flag.
 // Uninterruptible streamed speech (e.g. Generals Challenge enemy taunts) sets
 // disallowSpeech=TRUE so a speaker doesn't talk over himself; it's cleared when
@@ -132,12 +156,18 @@ OpenALAudioManager::OpenALAudioManager() :
 	m_audioCache = NEW OpenALAudioFileCache;
 	m_provider3D[0].name = "Miles Fast 2D Positional Audio";
 	m_provider3D[0].m_isValid = true;
+#if defined(GX_PLATFORM_VISIONOS)
+	s_gxManager.store(this);
+#endif
 }
 
 //-------------------------------------------------------------------------------------------------
 OpenALAudioManager::~OpenALAudioManager()
 {
 	DEBUG_ASSERTCRASH(m_binkAudio == NULL, ("Leaked a Bink handle. Chuybregts"));
+#if defined(GX_PLATFORM_VISIONOS)
+	s_gxManager.store(nullptr);
+#endif
 	releaseHandleForBink();
 	closeDevice();
 	delete m_audioCache;
@@ -554,6 +584,9 @@ void OpenALAudioManager::reset()
 void OpenALAudioManager::update()
 {
 	AudioManager::update();
+#if defined(GX_PLATFORM_VISIONOS)
+	gxApplyHostAudio();   // host volumes, HRTF mode and lifecycle pause, on the engine thread
+#endif
 	setDeviceListenerPosition();
 	processRequestList();
 	processPlayingList();
@@ -1589,7 +1622,24 @@ void OpenALAudioManager::openDevice(void)
 	}
 
 	ALCint attributes[] = { ALC_FREQUENCY, audioSettings->m_outputRate, 0 /* end-of-list */ };
+#if defined(GX_PLATFORM_VISIONOS)
+	(void)attributes;
+	// GeneralsX @feature visionOS audio: honour a binaural mode the host chose before the device opened.
+	ALCint gxAttributes[] = { ALC_FREQUENCY, audioSettings->m_outputRate, 0, 0, 0 /* end-of-list */ };
+	{
+		const gxaudio::HostListenerSnapshot snap = s_gxHostListener.snapshot();
+		if (snap.binauralMode != 0)
+		{
+			gxAttributes[2] = ALC_HRTF_SOFT;
+			gxAttributes[3] = (snap.binauralMode == 1) ? ALC_TRUE : ALC_FALSE;
+			gxAttributes[4] = 0;
+		}
+		m_gxBinauralGeneration = snap.binauralGeneration;
+	}
+	m_alcContext = alcCreateContext(m_alcDevice, gxAttributes);
+#else
 	m_alcContext = alcCreateContext(m_alcDevice, attributes);
+#endif
 	if (m_alcContext == nullptr) {
 		DEBUG_LOG(("Failed to create ALC context"));
 		setOn(false, AudioAffect_All);
@@ -1601,6 +1651,9 @@ void OpenALAudioManager::openDevice(void)
 		setOn(false, AudioAffect_All);
 		return;
 	}
+#if defined(GX_PLATFORM_VISIONOS)
+	s_gxDevice.store(m_alcDevice);
+#endif
 
 #ifdef AL_EXT_debug
 	if (alcIsExtensionPresent(m_alcDevice, "ALC_EXT_debug")) {
@@ -1626,6 +1679,9 @@ void OpenALAudioManager::openDevice(void)
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::closeDevice(void)
 {
+#if defined(GX_PLATFORM_VISIONOS)
+	s_gxDevice.store(nullptr);
+#endif
 	unselectProvider();
 	alcMakeContextCurrent(nullptr);
 
@@ -2962,6 +3018,30 @@ void OpenALAudioManager::closeAnySamplesUsingFile(const void* fileToClose)
 //-------------------------------------------------------------------------------------------------
 void OpenALAudioManager::setDeviceListenerPosition(void)
 {
+#if defined(GX_PLATFORM_VISIONOS)
+	{
+		// GeneralsX @feature visionOS audio: while the host supplies the user's head pose the listener is the head,
+		// expressed in game units through the board mapping; sources keep their game coordinates. When the host
+		// listener is off, not yet posed, or "Spatial battlefield audio" is switched off this whole block does nothing
+		// and the original camera-relative microphone below runs unchanged.
+		const gxaudio::HostListenerSnapshot snap = s_gxHostListener.snapshot();
+		if (snap.generation != m_gxHostGeneration || snap.active != m_gxHostWasActive)
+		{
+			m_gxHostGeneration = snap.generation;
+			m_gxHostWasActive = snap.active;
+			gxRetuneAllSources(snap.active);
+			alListenerf(AL_METERS_PER_UNIT, snap.active ? snap.listener.metersPerUnit : 1.0f);
+		}
+		if (snap.active)
+		{
+			const ALfloat ori[] = { snap.listener.forward.x, snap.listener.forward.y, snap.listener.forward.z,
+			                        snap.listener.up.x, snap.listener.up.y, snap.listener.up.z };
+			alListener3f(AL_POSITION, snap.listener.position.x, snap.listener.position.y, snap.listener.position.z);
+			alListenerfv(AL_ORIENTATION, ori);
+			return;
+		}
+	}
+#endif
 	ALfloat listenerOri[] = { m_listenerOrientation.x, m_listenerOrientation.y, m_listenerOrientation.z, 0.0f, 0.0f, 1.0f };
 	alListener3f(AL_POSITION, m_listenerPosition.x, m_listenerPosition.y, m_listenerPosition.z);
 	alListenerfv(AL_ORIENTATION, listenerOri);
@@ -3146,6 +3226,9 @@ ALuint OpenALAudioManager::playSample3D(AudioEventRTS* event, PlayingAudio* samp
 
 				alSourcef(source, AL_ROLLOFF_FACTOR, 0.5f);
 				alSource3f(source, AL_POSITION, x, y, z);
+#if defined(GX_PLATFORM_VISIONOS)
+				gxApplyDistanceModel(source, event);   // tabletop range/rolloff while the host listener is active
+#endif
 			}
 			alSourcei(source, AL_BUFFER, handle);
 			DEBUG_LOG(("Playing 3D sample '%s' at %f, %f, %f\n", event->getEventName().str(), x, y, z));
@@ -3373,3 +3456,203 @@ void OpenALAudioManager::dumpAllAssetsUsed()
 	logfile = NULL;
 }
 #endif
+
+
+#if defined(GX_PLATFORM_VISIONOS)
+//=================================================================================================
+// GeneralsX @feature visionOS audio (docs/visionos-audio.md)
+//=================================================================================================
+
+//-------------------------------------------------------------------------------------------------
+// Positional source range model. The original values (already applied by playSample3D) are the event's own
+// MinDistance/MaxDistance and rolloff 0.5. While the host listener is active they are replaced by the tabletop values,
+// which are derived in PHYSICAL metres from the head-to-table geometry and converted to game units with the board scale.
+void OpenALAudioManager::gxApplyDistanceModel(ALuint source, const AudioEventRTS* event)
+{
+	const gxaudio::HostListenerSnapshot snap = s_gxHostListener.snapshot();
+	if (!snap.active || !event || !event->getAudioEventInfo()) {
+		return;
+	}
+	ALint relative = AL_FALSE;
+	alGetSourcei(source, AL_SOURCE_RELATIVE, &relative);
+	if (relative == AL_TRUE) {
+		return;   // non-positional / multichannel fallback sources stay unattenuated exactly as the original does
+	}
+	const AudioEventInfo* info = event->getAudioEventInfo();
+	const Real eventMax = (info->m_type & ST_GLOBAL) ? (Real)getAudioSettings()->m_globalMaxRange : info->m_maxDistance;
+	const gxaudio::SourceAttenuation a = gxaudio::tabletopAttenuation(snap.tuning, snap.listener.metersPerUnit, eventMax);
+	alSourcef(source, AL_REFERENCE_DISTANCE, a.refDistance);
+	alSourcef(source, AL_MAX_DISTANCE, a.maxDistance);
+	alSourcef(source, AL_ROLLOFF_FACTOR, a.rolloff);
+}
+
+//-------------------------------------------------------------------------------------------------
+void OpenALAudioManager::gxRetuneAllSources(bool tabletop)
+{
+	const AudioSettings* audioSettings = getAudioSettings();
+	for (std::list<PlayingAudio*>::iterator it = m_playing3DSounds.begin(); it != m_playing3DSounds.end(); ++it) {
+		PlayingAudio* playing = *it;
+		if (!playing || !playing->m_audioEventRTS || !playing->m_audioEventRTS->getAudioEventInfo()) {
+			continue;
+		}
+		ALint relative = AL_FALSE;
+		alGetSourcei(playing->m_source, AL_SOURCE_RELATIVE, &relative);
+		if (relative == AL_TRUE) {
+			continue;
+		}
+		if (tabletop) {
+			gxApplyDistanceModel(playing->m_source, playing->m_audioEventRTS);
+		}
+		else {
+			// Back to exactly what playSample3D sets for a positional mono sample.
+			const AudioEventInfo* info = playing->m_audioEventRTS->getAudioEventInfo();
+			if (info->m_type & ST_GLOBAL) {
+				alSourcef(playing->m_source, AL_REFERENCE_DISTANCE, audioSettings->m_globalMinRange);
+				alSourcef(playing->m_source, AL_MAX_DISTANCE, audioSettings->m_globalMaxRange);
+			}
+			else {
+				alSourcef(playing->m_source, AL_REFERENCE_DISTANCE, info->m_minDistance);
+				alSourcef(playing->m_source, AL_MAX_DISTANCE, info->m_maxDistance);
+			}
+			alSourcef(playing->m_source, AL_ROLLOFF_FACTOR, 0.5f);
+		}
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+void OpenALAudioManager::gxApplyHostAudio(void)
+{
+	// Host mixer volumes: the same "system" volumes the in-game options sliders set, so script volumes keep multiplying.
+	float v = 0.0f;
+	if (s_gxHostMix.takeCategoryDirty(GXAUDIO_CATEGORY_MUSIC, &v)) {
+		setVolume(v, (AudioAffect)(AudioAffect_Music | AudioAffect_SystemSetting));
+	}
+	if (s_gxHostMix.takeCategoryDirty(GXAUDIO_CATEGORY_SPEECH, &v)) {
+		setVolume(v, (AudioAffect)(AudioAffect_Speech | AudioAffect_SystemSetting));
+	}
+	if (s_gxHostMix.takeCategoryDirty(GXAUDIO_CATEGORY_SFX_2D, &v)) {
+		setVolume(v, (AudioAffect)(AudioAffect_Sound | AudioAffect_SystemSetting));
+	}
+	if (s_gxHostMix.takeCategoryDirty(GXAUDIO_CATEGORY_SFX_3D, &v)) {
+		setVolume(v, (AudioAffect)(AudioAffect_Sound3D | AudioAffect_SystemSetting));
+	}
+	if (m_alcContext == nullptr) {
+		return;   // audio is off or the device failed to open: nothing below applies
+	}
+	if (s_gxHostMix.takeMasterDirty()) {
+		alListenerf(AL_GAIN, s_gxHostMix.master());
+	}
+
+	// HRTF / binaural mode: a device reset, applied once per change.
+	const gxaudio::HostListenerSnapshot snap = s_gxHostListener.snapshot();
+	if (snap.binauralGeneration != m_gxBinauralGeneration) {
+		m_gxBinauralGeneration = snap.binauralGeneration;
+		if (alcIsExtensionPresent(m_alcDevice, "ALC_SOFT_HRTF")) {
+			LPALCRESETDEVICESOFT alcResetDeviceSOFT = nullptr;
+			LOAD_ALC_PROC(alcResetDeviceSOFT);
+			if (alcResetDeviceSOFT) {
+				const ALCint hrtf = (snap.binauralMode == 1) ? ALC_TRUE : (snap.binauralMode == 2 ? ALC_FALSE : ALC_DONT_CARE_SOFT);
+				const ALCint attribs[] = { ALC_FREQUENCY, getAudioSettings()->m_outputRate, ALC_HRTF_SOFT, hrtf, 0 };
+				if (!alcResetDeviceSOFT(m_alcDevice, attribs)) {
+					DEBUG_LOG(("GXAudio: alcResetDeviceSOFT(HRTF mode %d) failed\n", snap.binauralMode));
+				}
+			}
+		}
+	}
+
+	// Lifecycle pause/resume, mirroring SDL3GameEngine's mobile handling: resume only what the game itself does not
+	// have paused (coming back into an open pause menu must not restart the battlefield behind it).
+	switch (s_gxHostPause.nextAction()) {
+	case gxaudio::HostPauseState::ApplyPause:
+		pauseAudio(AudioAffect_All);
+		break;
+	case gxaudio::HostPauseState::ApplyResume: {
+		const Bool gamePaused = (TheGameLogic != nullptr && TheGameLogic->isGamePaused());
+		resumeAudio(gamePaused ? AudioAffect_Music : AudioAffect_All);
+		break;
+	}
+	default:
+		break;
+	}
+}
+
+//-------------------------------------------------------------------------------------------------
+// C API (visionos/Audio/GXAudioListener.h)
+extern "C" {
+
+void GXAudio_SetHostListener(bool enabled) { s_gxHostListener.setHostEnabled(enabled); }
+
+void GXAudio_SetBoardFrame(const float centerWorld[3], float rightX, float rightY)
+{
+	s_gxHostListener.setBoardFrame(centerWorld, rightX, rightY);
+}
+
+void GXAudio_SetListenerPose(float boardScaleMetersPerWorldUnit, const float headPosBoardSpace[3],
+                             const float headForwardBoardSpace[3], const float headUpBoardSpace[3])
+{
+	s_gxHostListener.setPose(boardScaleMetersPerWorldUnit, headPosBoardSpace, headForwardBoardSpace, headUpBoardSpace);
+}
+
+void GXAudio_SetSpatialBattlefieldAudio(bool enabled) { s_gxHostListener.setSpatial(enabled); }
+bool GXAudio_GetSpatialBattlefieldAudio(void) { return s_gxHostListener.spatial(); }
+bool GXAudio_IsHostListenerActive(void) { return s_gxHostListener.active(); }
+
+void GXAudio_SetTabletopAttenuation(float refDistanceMeters, float rolloff, float maxDistanceMeters)
+{
+	s_gxHostListener.setTuning(refDistanceMeters, rolloff, maxDistanceMeters);
+}
+
+void GXAudio_SetBinauralMode(int mode) { s_gxHostListener.setBinaural(mode); }
+
+void GXAudio_SetMasterVolume(float volume) { s_gxHostMix.setMaster(volume); }
+float GXAudio_GetMasterVolume(void) { return s_gxHostMix.master(); }
+
+void GXAudio_SetCategoryVolume(int category, float volume) { s_gxHostMix.setCategory(category, volume); }
+
+float GXAudio_GetCategoryVolume(int category)
+{
+	if (category < 0 || category >= GXAUDIO_CATEGORY_COUNT) {
+		return 0.0f;
+	}
+	if (s_gxHostMix.categoryWasSet(category)) {
+		return s_gxHostMix.category(category);
+	}
+	OpenALAudioManager* mgr = s_gxManager.load();
+	if (!mgr) {
+		return 1.0f;
+	}
+	static const AudioAffect kAffect[GXAUDIO_CATEGORY_COUNT] = { AudioAffect_Music, AudioAffect_Speech, AudioAffect_Sound, AudioAffect_Sound3D };
+	return mgr->getVolume(kAffect[category]);
+}
+
+void GXAudio_EnginePause(void)
+{
+	if (s_gxHostPause.request(true)) {
+		ALCdevice* dev = s_gxDevice.load();
+		if (dev) {
+			// Thread-safe (ALC_SOFT_pause_device); silences at once even if the engine is not running frames.
+			LPALCDEVICEPAUSESOFT pauseFn = reinterpret_cast<LPALCDEVICEPAUSESOFT>(alcGetProcAddress(dev, "alcDevicePauseSOFT"));
+			if (pauseFn) {
+				pauseFn(dev);
+			}
+		}
+	}
+}
+
+void GXAudio_EngineResume(void)
+{
+	if (s_gxHostPause.request(false)) {
+		ALCdevice* dev = s_gxDevice.load();
+		if (dev) {
+			LPALCDEVICERESUMESOFT resumeFn = reinterpret_cast<LPALCDEVICERESUMESOFT>(alcGetProcAddress(dev, "alcDeviceResumeSOFT"));
+			if (resumeFn) {
+				resumeFn(dev);
+			}
+		}
+	}
+}
+
+bool GXAudio_IsEnginePaused(void) { return s_gxHostPause.wanted(); }
+
+}  // extern "C"
+#endif  // GX_PLATFORM_VISIONOS
