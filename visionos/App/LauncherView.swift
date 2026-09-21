@@ -21,6 +21,8 @@ struct LauncherView: View {
 
                 GameDataSection()
 
+                EngineSection()
+
                 GroupBox("Tabletop") {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(model.statusText).font(.headline)
@@ -76,7 +78,9 @@ struct LauncherView: View {
             model.handlePickerResult(result)
         }
         .task {
+            model.startEngineInfrastructure()
             await model.startGameData()
+            model.autoStartEngineIfRequested()
             if LaunchOptions.autoImmersive { await enter() }
             while !Task.isCancelled {
                 model.refresh()
@@ -84,6 +88,9 @@ struct LauncherView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
+            // The engine thread parks (and silences audio) while the scene is not active, exactly like the mobile
+            // background handling of the 2D port; the compositor keeps presenting the last frame meanwhile.
+            GXEngineHost_Pause(GX_PAUSE_SCENE, phase != .active)
             switch phase {
             case .background: GXXRBridgeNotifyLifecycle(Int32(PLATFORM_LIFECYCLE_SUSPEND.rawValue))
             case .active:
@@ -115,6 +122,67 @@ struct LauncherView: View {
         model.spaceState = .closing
         await dismissImmersiveSpace()
         model.spaceState = .closed
+    }
+}
+
+// MARK: - Engine section
+
+/// "Start Game", booting progress, failure reasons (with the log path and the last log lines) and the running state.
+/// The engine boots on its own thread and never blocks the UI or the compositor.
+private struct EngineSection: View {
+    @Environment(AppModel.self) private var model
+
+    var body: some View {
+        GroupBox("Engine") {
+            VStack(alignment: .leading, spacing: 10) {
+                switch model.enginePhase {
+                case GX_ENGINE_IDLE:
+                    StatusHeadline(symbol: "play.circle", tint: .secondary, title: model.isGameDataReady ? "Ready to start" : "Waiting for game data",
+                                   subtitle: model.isGameDataReady ? "Start Game boots the engine in the background (about a minute). You can enter the tabletop while it boots." : "The engine needs your validated game data.")
+                    if !model.engineStartNotice.isEmpty {
+                        Label(model.engineStartNotice, systemImage: "exclamationmark.triangle.fill").font(.callout).foregroundStyle(.orange)
+                    }
+                    Button {
+                        model.startEngine()
+                    } label: {
+                        Label("Start Game", systemImage: "play.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!model.canStartEngine)
+                case GX_ENGINE_BOOTING:
+                    HStack(spacing: 12) {
+                        ProgressView()
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(model.engineHeadline).font(.headline)
+                            Text(model.engineProgress).font(.callout).foregroundStyle(.secondary)
+                        }
+                    }
+                    if !model.engineLastLogLine.isEmpty {
+                        Text(model.engineLastLogLine).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                case GX_ENGINE_FAILED:
+                    StatusHeadline(symbol: "xmark.octagon.fill", tint: .red, title: "The engine could not start", subtitle: model.engineError.isEmpty ? "No reason was recorded. See the log." : model.engineError)
+                    if !model.engineLogTail.isEmpty {
+                        Text(model.engineLogTail).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(12).textSelection(.enabled)
+                    }
+                    Text("Log file: \(model.engineLogPath)").font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                    Text("Fix the reason above (usually missing or damaged game files), then restart the app: the engine can be started once per launch.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                default:
+                    StatusHeadline(symbol: model.enginePhase == GX_ENGINE_PAUSED ? "pause.circle.fill" : "checkmark.circle.fill",
+                                   tint: model.enginePhase == GX_ENGINE_PAUSED ? .yellow : .green,
+                                   title: model.engineIsFake ? "Fake engine (test scene)" : model.engineHeadline,
+                                   subtitle: model.engineProgress)
+                    if !model.compositorFpsText.isEmpty {
+                        Text(model.compositorFpsText).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    }
+                    if model.engineLogicHz > 0 {
+                        Text(String(format: "Simulation: %.1f Hz (target 30)", model.engineLogicHz)).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 

@@ -68,7 +68,7 @@ void GXXRBridgeGetStatus(GXXRBridgeStatus* outStatus);
 ///     the same mailbox / ring / compositor path as the real engine). Same as the launch arguments -fakeEngine
 ///     and -angleTestScene, which the app reads.
 /// Other launch arguments read by the bridge: -angleEyeScale <f>, -angleAtlas,
-/// -angleSync glfinish, -angleTargetFormat rgba|bgra, -angleNoUIPanel, -fakeEngineStall <s>, -fakeEngineBoot <s>,
+/// -angleSync glfinish, -angleTargetFormat rgba|bgra, -angleNoUIPanel, -fakeEngineStall SEC, -fakeEngineBoot SEC,
 /// -fakeEngineFps <n> (see ANGLE/GXXRAngleOptions.h).
 void GXXRBridgeSetBoolOption(const char* key, bool value);
 

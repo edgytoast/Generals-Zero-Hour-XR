@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build the native visionOS shell (GeneralsZHXR) with XcodeGen + xcodebuild.
 #
-#   build-shell.sh simulator|device [--derived-data DIR] [--configuration Debug|Release] [--clean]
+#   build-shell.sh simulator|device [--derived-data DIR] [--configuration Debug|Release] [--clean] [--no-build-engine]
 #
 #   simulator  xrsimulator SDK, runs in the visionOS simulator (no signing needed)
 #   device     xros SDK, UNSIGNED compile-only check (CODE_SIGNING_ALLOWED=NO); the resulting
@@ -13,11 +13,16 @@
 # GX_ANGLE_LINK=static (default) links libANGLE.a + libtranslator.a into the app; GX_ANGLE_LINK=shared
 # embeds and signs libANGLE-shared.dylib in Frameworks/.
 #
+# The Zero Hour engine is linked into the app as GeneralsZHEngine.xcframework (scripts/build/visionos/make-xcframework.sh).
+# When the slice for the selected mode is missing this script builds it first (build-engine.sh + make-xcframework.sh,
+# minutes: pass --no-build-engine to get the exact commands instead). GX_ENGINE_XCFRAMEWORK overrides the location
+# (default <repo>/build/xcframework/GeneralsZHEngine.xcframework); GX_ENGINE_BUILD_ROOT the engine build root.
+#
 # Prints the built .app path on the last line of stdout (everything else goes to stderr).
 set -euo pipefail
 
 MODE="${1:-}"
-[[ "$MODE" == "simulator" || "$MODE" == "device" ]] || { echo "usage: $0 simulator|device [--derived-data DIR] [--configuration Debug|Release] [--clean]" >&2; exit 2; }
+[[ "$MODE" == "simulator" || "$MODE" == "device" ]] || { echo "usage: $0 simulator|device [--derived-data DIR] [--configuration Debug|Release] [--clean] [--no-build-engine]" >&2; exit 2; }
 shift
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -25,11 +30,13 @@ SPEC="$ROOT/visionos/project.yml"
 DERIVED="${GXX_VISIONOS_DERIVED_DATA:-/private/tmp/GeneralsZHXR-DerivedData}"
 CONFIG="Debug"
 CLEAN=0
+BUILD_ENGINE=1
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --derived-data) DERIVED="$2"; shift 2 ;;
     --configuration) CONFIG="$2"; shift 2 ;;
     --clean) CLEAN=1; shift ;;
+    --no-build-engine) BUILD_ENGINE=0; shift ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -57,6 +64,33 @@ EOF
 fi
 export GX_ANGLE_ROOT="$ANGLE_ROOT" GX_ANGLE_LINK="$ANGLE_LINK"
 
+# ---- Engine library (xcframework) ------------------------------------------------------------
+# shellcheck source=env.sh
+source "$ROOT/scripts/build/visionos/env.sh" >&2
+ENGINE_SLICE_DIR="xros-arm64-simulator"; ENGINE_FLAG="--simulator"; ENGINE_SLICE_NAME="simulator"
+if [[ "$MODE" == "device" ]]; then ENGINE_SLICE_DIR="xros-arm64"; ENGINE_FLAG="--device"; ENGINE_SLICE_NAME="device"; fi
+export GX_ENGINE_XCFRAMEWORK="${GX_ENGINE_XCFRAMEWORK:-$GX_ENGINE_BUILD_ROOT/xcframework/GeneralsZHEngine.xcframework}"
+if [[ ! -f "$GX_ENGINE_XCFRAMEWORK/$ENGINE_SLICE_DIR/libGeneralsZHEngine_all.a" ]]; then
+  CMDS="scripts/build/visionos/build-engine.sh $ENGINE_FLAG && scripts/build/visionos/make-xcframework.sh $ENGINE_FLAG"
+  if [[ "$BUILD_ENGINE" == 0 ]]; then
+    {
+      echo "error: the engine library for the $ENGINE_SLICE_NAME slice is missing ($GX_ENGINE_XCFRAMEWORK/$ENGINE_SLICE_DIR)."
+      echo "       Build it (a few minutes for the simulator, 15+ for the device) with:"
+      echo
+      echo "         $CMDS"
+      echo
+      echo "       or run this script without --no-build-engine."
+    } >&2
+    exit 1
+  fi
+  echo "==> engine library for the $ENGINE_SLICE_NAME slice not found; building it first: $CMDS" >&2
+  ( cd "$ROOT" && scripts/build/visionos/build-engine.sh "$ENGINE_FLAG" && scripts/build/visionos/make-xcframework.sh "$ENGINE_FLAG" ) >&2
+  [[ -f "$GX_ENGINE_XCFRAMEWORK/$ENGINE_SLICE_DIR/libGeneralsZHEngine_all.a" ]] || { echo "error: the engine build did not produce $GX_ENGINE_XCFRAMEWORK/$ENGINE_SLICE_DIR" >&2; exit 1; }
+fi
+LDFLAGS_FILE="$GX_ENGINE_BUILD_ROOT/xcframework/$ENGINE_SLICE_NAME/link-flags.txt"
+ENGINE_LDFLAGS=""
+if [[ -f "$LDFLAGS_FILE" ]]; then ENGINE_LDFLAGS="$(tr '\n' ' ' < "$LDFLAGS_FILE") -lc++"; fi
+
 if [[ "$MODE" == "simulator" ]]; then
   SDK="xrsimulator"; DEST="generic/platform=visionOS Simulator"; PRODUCTS="$CONFIG-xrsimulator"
   SIGN_ARGS=()
@@ -82,6 +116,8 @@ xcodebuild -project "$ROOT/visionos/GeneralsZHXR.xcodeproj" \
   -destination "$DEST" \
   -derivedDataPath "$DERIVED" \
   GX_ANGLE_ROOT="$ANGLE_ROOT" GX_ANGLE_LINK="$ANGLE_LINK" \
+  GX_ENGINE_XCFRAMEWORK="$GX_ENGINE_XCFRAMEWORK" \
+  ${ENGINE_LDFLAGS:+GX_ENGINE_LDFLAGS="$ENGINE_LDFLAGS"} \
   ${SIGN_ARGS[@]+"${SIGN_ARGS[@]}"} \
   "${ACTION[@]}" >"$LOG" 2>&1
 STATUS=$?

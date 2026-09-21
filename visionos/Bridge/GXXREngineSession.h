@@ -12,6 +12,7 @@
 #import "GXXRANGLEContext.h"
 #import "GXXRFrameMailbox.h"
 #import "GXXRTargetRing.h"
+#import "GXXREngineSessionC.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -23,13 +24,5 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly, nullable) GXXRANGLEContext* context;
 @end
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-/// Starts the synthetic GLES3 test client on the engine thread (launch argument -fakeEngine). Idempotent.
-bool GXXRBridgeStartFakeEngine(void);
-#ifdef __cplusplus
-}
-#endif
 
 NS_ASSUME_NONNULL_END
