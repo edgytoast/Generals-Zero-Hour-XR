@@ -126,6 +126,12 @@ system device, so on visionOS the two are the same object (there is one GPU). Th
 and exposed as `GXXRBridgeStatus.devicesMatch`; see "Measured results". If they ever differ the ring textures could not
 be sampled by the compositor queue, so the check is a loud log line, not a silent assumption.
 
+**Confirmed by measurement (simulator, ANGLE 2.1.28778):** the two devices are the same object. The check is done
+by registry ID (`0x10000055b`), not by pointer, because `EGL_ANGLE_device_metal` returns the id ANGLE itself holds.
+The textures the ring creates from ANGLE's device were sampled successfully by the compositor command buffer in every
+run. On a physical Vision Pro the same code path applies (`MTLCreateSystemDefaultDevice`, one GPU) but this has not
+been observed there.
+
 ### GPU-GPU synchronisation
 
 ANGLE renders on its own `MTLCommandQueue`; the composite runs on the compositor queue. Per frame:
@@ -138,6 +144,10 @@ ANGLE renders on its own `MTLCommandQueue`; the composite runs on the compositor
 4. `ring encodeWaitForGLInto:cb` puts `encodeWaitForEvent(glEvent, n)` at the start of the compositor command buffer.
 5. Composite passes sample the slot's textures.
 6. `ring encodeReleaseInto:cb` appends `encodeSignalEvent(releaseEvent, m)`.
+
+**Mechanism actually used: `EGL_ANGLE_metal_shared_event_sync` (present in this ANGLE build).** The `glFinish`
+fallback exists and is selectable with `-angleSync glfinish`, but it costs about 4.4 - 5.3 ms of CPU per frame in the
+simulator against 0.07 ms for the shared event, and it is only taken automatically when the extension is missing.
 
 If the extension is missing (or `-angleSync glfinish`) step 3 becomes `glFinish()`, step 4 is a no-op, and the log says
 `glFinish (fallback...)`; the mode in use is printed at ring creation and in every timing line.
@@ -194,6 +204,9 @@ These are CPU times; GPU time is not measured. The same numbers are in `GXXRBrid
 
 * One render loop thread per immersive-space lifetime; a global mutex makes a re-opened space's loop wait until the
   previous loop has torn down its ring/scene and released the ANGLE context. The context itself is never destroyed.
+* A frame from `cp_layer_renderer_query_next_frame` can become invalid at any moment (the space closes, the layer
+  pauses). If `cp_frame_query_drawables` returns no drawables the loop must NOT call `cp_frame_end_submission`; doing so
+  aborts the process. The loop drops the frame and re-reads the layer state.
 * While the layer is paused the loop does no GL and no Metal work (it polls the layer state).
 * On layer invalidation the loop drains the ring (waits for the last composite), lets the client detach
   (`hostWillDetach`), deletes the ring's GL textures/syncs and test-scene GL objects with the context current, releases
@@ -252,6 +265,17 @@ context is current, the engine survives between calls):
 textures (the engine's FBOs that had them attached must be re-created or re-attached at the next attach; the engine
 gets fresh GL names from `fillTargets:` on the next loop). Do not shut the engine down.
 
+Notes for the engine side that the test scene already exercises:
+
+* The GL names in `D3D8GLES_XRTargets` **rotate** through three sets (one per ring slot), so the backend has to
+  re-attach the texture to its framebuffer object every frame (or when the name differs from the cached one). Caching an
+  FBO with the previous frame's attachment would render into a texture the compositor is still reading.
+* Loop over `frame->eye_count` eyes: the simulator gives one view, a headset two (`dedicated` or `shared` layout). With
+  `ring.atlas` both eyes go into the one STEREO_LEFT target at `eyeRect[e]` and the bridge samples that rectangle.
+* Use `-angleTestScene` (or `GXXRBridgeSetHostFrameClient(nil)`) to check the host without the engine: if the test scene
+  is right and the engine picture is not, the fault is on the engine side.
+* Simulator numbers to compare against: 60 fps, about 0.3 ms of host CPU per frame in total (see "Measured results").
+
 Rules: the GL names in `D3D8GLES_XRTargets` are valid for that frame only; never `glReadPixels` from them; never call
 GL on any thread but the render thread; only the render thread may make the ANGLE context current.
 
@@ -275,4 +299,37 @@ let them pick a folder (`LSSupportsOpeningDocumentsInPlace`).
 
 ## Measured results
 
-RESULTS_PLACEHOLDER
+All numbers below were measured on the visionOS 26.5 **simulator** (Apple silicon host, Xcode 27.0, Debug build,
+`-layout dedicated` unless stated) while the machine was heavily shared with other builds and simulators (load average
+well above 500), so absolute CPU times are indicative only and nothing here says anything about a physical Vision Pro.
+Raw logs, CSVs and screenshots of these runs are kept by the package owner outside the repository.
+
+| Item | Result |
+| --- | --- |
+| ANGLE version / renderer | `OpenGL ES 3.0 (ANGLE 2.1.28778 git hash: e3fdc27d77e3)`, `ANGLE (Apple, ANGLE Metal Renderer: Apple xrOS simulator GPU, Version 26.5 (Build 23O470))`, EGL 1.5 |
+| Extensions present | `EGL_ANGLE_metal_shared_event_sync`, `EGL_ANGLE_metal_texture_client_buffer`, surfaceless context, `GL_OES_EGL_image` |
+| ANGLE `MTLDevice` vs compositor device | the **same object**: both `Apple xrOS simulator GPU`, registry ID `0x10000055b` (logged at every loop start as `SAME DEVICE`) |
+| Ring | 3 slots, `RGBA8Unorm` accepted (framebuffer complete), stereo target 3840x2160 x 3 = 94.9 MB, UI target 1280x720 x 3 = 10.5 MB, 105 MB allocated |
+| GPU-GPU sync in use | `metal-shared-event` (`EGL_ANGLE_metal_shared_event_sync`); the `glFinish` fallback was also run with `-angleSync glfinish` |
+| Frame rate | median 60.0 fps over 359 one-second windows of the soak (min 52.0 under load, max 60.9); direct-Metal scene 60 fps too |
+| CPU ms/frame, shared-event sync (mean of 359 windows) | glSubmit 0.184, syncWait 0.073, composite 0.032, total 0.321 |
+| CPU ms/frame, `glFinish` fallback | syncWait 4.4 - 5.3, total 4.8 - 5.7 (the CPU waits for every frame; use only as a fallback) |
+| CPU ms/frame, direct Metal scene (no ANGLE) | total 0.07 - 0.09 |
+| 349 s soak (ANGLE test scene, dedicated) | 21105 frames; `vmmap` physical footprint 43.2 MB at start, 45.3 MB after 23 s and 45.5 MB at the end (flat, +0.2 MB in the last 5 minutes); `ps` RSS fell from 289 MB to 141 MB (the simulator process is swapped and compressed; RSS is not a leak signal here); 0 GL errors, no `error` lines in the console |
+| Close / re-open cycles | `-cycleImmersive 6 -cycleHold 12`: 6 rounds plus the final re-open = 7 loop generations, every render loop exited cleanly, every ring reported `ring torn down (0 release timeouts over its life)` and every GL test scene `0 GL errors`; footprint 52.9 MB (generation 1) to 57.8 MB (generation 7), RSS falling. Seven cycles are too few to prove the +5 MB is not slow growth: treat it as "no large leak" |
+| Layouts | `dedicated` (default in the simulator soak), `shared` (60 fps, same picture), `shared` + `-angleAtlas` (60 fps, same picture; the simulator only has one view, so the atlas is exercised with one eye rect) |
+| Visual check | screenshots read back and looked at: ANGLE scene vs direct-Metal scene are pixel-for-pixel the same board, units, grid and shadow (only the animated orbiter cube differs); the UI panel quad shows the title bar with a live frame counter that matches the app's own frame count, and its red/green/blue/yellow corner markers are at top-left / top-right / bottom-right / bottom-left, i.e. correct orientation and no V flip |
+
+Not measured: GPU time, two-view stereo (the simulator hands out one view), a physical device, foveation (off by design),
+the engine itself (not attached yet).
+
+### Defects found and fixed during verification
+
+* **Abort when the immersive space closes.** Compositor Services aborts the process (`BUG IN CLIENT:
+  cp_frame_end_submission() failed because the frame is not valid`, SIGABRT on `GXXR.Compositor`) if a frame that has
+  no drawables is ended. Closing the space invalidates the layer between the state check and `cp_frame_query_drawables`,
+  so the loop must drop such a frame instead of ending it. Fixed in `GXXRBridge.mm` (the loop `continue`s when the
+  frame has no drawables and lets the state check at the top of the loop see the invalidation). Before the fix every
+  `dismissImmersiveSpace` killed the app; after it six consecutive cycles pass.
+* The UI panel test quad was partly outside the simulator's 90 degree view; it now stands 0.74 m to the right of the
+  board centre and is fully visible.
