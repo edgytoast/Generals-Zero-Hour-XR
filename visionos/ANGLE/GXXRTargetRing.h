@@ -9,18 +9,29 @@
 // its framebuffers (through d3d8gles_SetXRHostTargets); the MTLTextures are what the compositor
 // samples.
 //
-// GPU-GPU synchronisation, per frame and slot:
-//   GL side    -> beginFrame (waits until the compositor released this slot)
-//                 ... GL rendering ...
-//                 endGLWork: eglCreateSync(EGL_SYNC_METAL_SHARED_EVENT_ANGLE, glEvent, n) + glFlush
-//                 (falls back to glFinish when the extension is missing or forced off)
-//   Metal side -> encodeWaitForGLInto: encodeWaitForEvent(glEvent, n) on the compositor command buffer,
-//                 ... composite passes that sample the textures ...
-//                 encodeReleaseInto: encodeSignalEvent(releaseEvent, m); the next beginFrame that
-//                 reuses the slot waits for it on the CPU.
+// Ownership and threads (engine thread / compositor thread split, docs/visionos-engine-host.md):
 //
-// All methods except -encodeWaitForGLInto: / -encodeReleaseInto: must run on the thread that owns
-// the ANGLE context, with the context current.
+//   Engine thread (owns the ANGLE context; GL side):
+//     -beginFrame            acquires a FREE slot (reference count 0) and takes the writer reference;
+//                            waits (bounded) when every slot is still being composited
+//     -fillTargets:          the D3D8GLES_XRTargets of that slot for d3d8gles_SetXRHostTargets
+//     -endGLWork             eglCreateSync(EGL_SYNC_METAL_SHARED_EVENT_ANGLE, glEvent, n) + glFlush
+//                            (glFinish fallback), records n as the slot's GL value
+//     -abortFrame            gives the writer reference back without publishing
+//
+//   The writer reference is TRANSFERRED to the frame mailbox by publishing; the mailbox drops it when a
+//   newer frame replaces it. Every composite that samples a slot holds one more reference.
+//
+//   Compositor thread (Metal side; never touches GL):
+//     -retainSlot:           +1 (the mailbox does it when the compositor takes the latest frame)
+//     -encodeWaitForGLSlot:into:   encodeWaitForEvent(glEvent, slot's GL value) on the composite command buffer
+//     -releaseSlot:afterCommandBuffer:  -1 when that command buffer has COMPLETED on the GPU
+//
+//   A slot is reusable exactly when its reference count is 0, so a published slot stays in use across as
+//   many composites as re-present it (the compositor runs faster than the engine and repeats the last
+//   frame while the engine stalls) and is released only after the last composite command buffer finished.
+//   Rendering into a slot needs no GPU-side "release" fence: the completed handler is the release.
+//
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
@@ -37,12 +48,14 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) MTLPixelFormat pixelFormat;
 /// YES when MTLSharedEvent fences are used; NO when the glFinish fallback is in effect.
 @property(nonatomic, readonly) BOOL usesSharedEventSync;
-/// Slot chosen by the last successful -beginFrame.
+/// Slot chosen by the last successful -beginFrame (engine thread).
 @property(nonatomic, readonly) NSUInteger currentSlot;
-/// CPU milliseconds the last frame spent waiting (slot release wait + glFinish fallback).
+/// CPU milliseconds the last engine frame spent waiting (free-slot wait + glFinish fallback).
 @property(nonatomic, readonly) double lastSyncWaitMs;
-/// Times a slot-release wait timed out (compositor stalled); frames continue regardless.
+/// Times -beginFrame found no free slot within its wait budget (compositor stalled); that frame is skipped.
 @property(nonatomic, readonly) uint64_t releaseTimeouts;
+/// Slots whose reference count is not 0 right now (diagnostics, any thread).
+@property(nonatomic, readonly) NSUInteger slotsInUse;
 /// Total ring GPU memory in bytes (color only).
 @property(nonatomic, readonly) uint64_t allocatedBytes;
 
@@ -65,29 +78,42 @@ NS_ASSUME_NONNULL_BEGIN
 /// becomes (w * eyeCount) x h and STEREO_RIGHT is disabled.
 - (void)configureStereoEyeWidth:(int)width height:(int)height eyeCount:(int)eyeCount;
 
-/// Acquires the next slot: waits (CPU) until the compositor finished reading it, (re)allocates
-/// targets whose size changed, imports new textures. Returns NO if allocation failed.
-- (BOOL)beginFrame;
+/// (Engine thread) Would -beginFrame have to re-create targets because a declared size changed?
+/// The caller must drop every published reference (mailbox) BEFORE calling -beginFrame in that case.
+@property(nonatomic, readonly) BOOL needsResize;
 
-/// The struct passed to d3d8gles_SetXRHostTargets for the slot acquired by -beginFrame.
+/// (Engine thread) Acquires a free slot, taking the writer reference; (re)allocates targets whose size changed
+/// (after draining every composite), imports new textures. Returns -1 when allocation failed or no slot became
+/// free in time (the frame is skipped).
+- (NSInteger)beginFrame;
+
+/// (Engine thread) The struct passed to d3d8gles_SetXRHostTargets for the slot acquired by -beginFrame.
 - (void)fillTargets:(struct D3D8GLES_XRTargets*)outTargets;
 
-/// Current slot's texture / GL name for a target; nil / 0 when the target is disabled.
-- (nullable id<MTLTexture>)textureForTarget:(int)target;
-- (unsigned)glTextureForTarget:(int)target;
+/// (Engine thread) glFlush + signal (or glFinish). Call after the GL frame.
+- (void)endGLWork;
+/// (Engine thread) Gives the writer reference back without publishing (the frame is dropped).
+- (void)abortFrame;
+
+/// (Any thread) Reference counting of a slot. The frame mailbox / composite hold references.
+- (void)retainSlot:(NSUInteger)slot;
+- (void)releaseSlot:(NSUInteger)slot;
+/// (Compositor thread) Releases `slot` when `commandBuffer` has completed on the GPU.
+- (void)releaseSlot:(NSUInteger)slot afterCommandBuffer:(id<MTLCommandBuffer>)commandBuffer;
+/// (Compositor thread) Encodes the GPU wait for the GL work of `slot`.
+- (void)encodeWaitForGLSlot:(NSUInteger)slot into:(id<MTLCommandBuffer>)commandBuffer;
+
+/// (Any thread, but only for a slot the caller holds a reference to) Textures and sizes of a slot.
+- (nullable id<MTLTexture>)textureForTarget:(int)target slot:(NSUInteger)slot;
 - (int)widthForTarget:(int)target;
 - (int)heightForTarget:(int)target;
+/// (Engine thread) Current slot's texture / GL name for a target; nil / 0 when the target is disabled.
+- (nullable id<MTLTexture>)textureForTarget:(int)target;
+- (unsigned)glTextureForTarget:(int)target;
 
-/// glFlush + signal (or glFinish). Call after the GL frame, before encoding the composite.
-- (void)endGLWork;
-/// Encodes the GPU wait for the GL work of the current slot on the compositor command buffer.
-- (void)encodeWaitForGLInto:(id<MTLCommandBuffer>)commandBuffer;
-/// Encodes the "slot may be rewritten" signal; call after the last composite pass sampling the slot.
-- (void)encodeReleaseInto:(id<MTLCommandBuffer>)commandBuffer;
-
-/// Waits for every outstanding composite (CPU). Used before resizing and at teardown.
+/// (Engine thread) Waits for every reference to drop (CPU, bounded). Used before resizing and at teardown.
 - (void)drain;
-/// Deletes every GL texture / sync and drops the MTLTextures. The ANGLE context must be current.
+/// (Engine thread) Deletes every GL texture / sync and drops the MTLTextures. The ANGLE context must be current.
 - (void)teardown;
 
 @end

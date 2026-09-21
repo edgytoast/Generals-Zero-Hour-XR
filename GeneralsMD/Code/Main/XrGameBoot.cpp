@@ -105,6 +105,10 @@
 #include "Common/AudioAffect.h"
 #include "Common/GameAudio.h"
 #include "GameNetwork/NetworkInterface.h"
+#include "visionos/GXEngineHostServices.h"
+static_assert(int(GX_XRT_STEREO_LEFT) == int(D3D8GLES_XRT_STEREO_LEFT) && int(GX_XRT_STEREO_RIGHT) == int(D3D8GLES_XRT_STEREO_RIGHT) &&
+	int(GX_XRT_GAME) == int(D3D8GLES_XRT_GAME) && int(GX_XRT_WORLD) == int(D3D8GLES_XRT_WORLD) && int(GX_XRT_UI) == int(D3D8GLES_XRT_UI),
+	"GXEngineHostServices.h target indices must match d3d8gles.h");
 #endif
 
 #define GX_BOOT_TAG "gx-xr-boot"
