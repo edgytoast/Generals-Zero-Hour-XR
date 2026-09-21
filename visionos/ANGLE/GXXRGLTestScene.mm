@@ -508,7 +508,7 @@ const uint16_t kDigits[10] = {0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x
     const simd_float4x4 worldFromBoard = M(wfb);
     // Panel stands to the right of the board (clear of the launcher window that hangs over the far edge),
     // turned to face the player's viewpoint 1.25 m in front of the board center, 0.64 x 0.36 m (16:9).
-    const float px = 0.90f, pz = 0.0f;
+    const float px = 0.74f, pz = 0.0f;
     const simd_float4 p = simd_mul(worldFromBoard, simd_make_float4(px, 0.20f, pz, 1.0f));
     const simd_float3x3 boardRot = simd_matrix(simd_normalize(worldFromBoard.columns[0].xyz), simd_normalize(worldFromBoard.columns[1].xyz),
                                                simd_normalize(worldFromBoard.columns[2].xyz));
