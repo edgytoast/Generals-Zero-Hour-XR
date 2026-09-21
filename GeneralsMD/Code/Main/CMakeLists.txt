@@ -255,6 +255,13 @@ if(SAGE_BUILD_VISIONOS_LIB)
     file(GLOB _visionos_sources CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/visionos/*.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/visionos/*.mm")
+    # GeneralsX @feature visionOS port: XrGameBoot.cpp is host neutral (GX_XR_HOST) and is the
+    # visionOS boot too (XrGameBoot_InitHost). It defines the GX_XR_* engine hooks
+    # (GX_XR_OffscreenBoot, BeginStereoWorld, EndStereoWorld, RenderCamera, BeginUILayer,
+    # WorldRequested, SplitUIAllowed, ShadowCategory, UpdateTerrainCoverage,
+    # PresentLoadingFrame, CullSphere, PointerRay) that verify-engine.sh used to list as
+    # undefined. It needs the same shim / d3d8gles include directories as the visionos/ sources.
+    list(APPEND _visionos_sources "${CMAKE_CURRENT_SOURCE_DIR}/XrGameBoot.cpp")
     if(_visionos_sources)
         target_sources(z_generals PRIVATE ${_visionos_sources})
         # The pure Quest headers (XrMath.h, XrTactics.h, ...) that VisionInteraction.cpp reuses

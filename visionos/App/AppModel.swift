@@ -27,6 +27,26 @@ final class AppModel {
 
     var inputSummary = "No spatial events yet."
 
+    // MARK: Engine (state lives here, logic in AppModel+Engine.swift)
+
+    /// Where the engine host is (GXEngineHost_GetStatus), refreshed with everything else in `refresh()`.
+    var enginePhase: GXEngineHostPhase = GX_ENGINE_IDLE
+    var engineIsFake = false
+    var engineProgress = ""
+    var engineError = ""
+    var engineLastLogLine = ""
+    var engineLogPath = ""
+    var engineLogTail = ""
+    var engineBootSeconds = 0.0
+    var engineFps = 0.0
+    var engineLogicHz = 0.0
+    var engineFrames: UInt64 = 0
+    var engineWaitingForCompositor = false
+    var compositorFpsText = ""
+    /// Reason the last "Start Game" could not even be attempted (before the engine thread exists).
+    var engineStartNotice = ""
+    @ObservationIgnored var engineAutoStartDone = false
+
     // MARK: Game data (logic lives in GameData/AppModel+GameData.swift)
 
     /// One state for the launcher and the engine bridge. Change it only through
@@ -72,6 +92,7 @@ final class AppModel {
     func refresh() {
         var st = GXXRBridgeStatus()
         GXXRBridgeGetStatus(&st)
+        refreshEngine(compositor: st)
         fps = st.fps
         frames = st.framesRendered
         views = Int(st.viewCount)
@@ -91,7 +112,11 @@ final class AppModel {
         case .opening: statusText = "Opening immersive space..."
         case .closing: statusText = "Closing immersive space..."
         case .open:
-            statusText = String(format: "Tabletop live: %.0f fps, %d view(s), %@ layout, head %@", fps, views, layout, headTracked ? "tracked" : "fallback pose")
+            if st.engineMode {
+                statusText = String(format: "Tabletop live: compositor %.0f fps, engine %.0f fps, %d view(s), %@ layout, head %@", fps, st.engineFps, views, layout, headTracked ? "tracked" : "fallback pose")
+            } else {
+                statusText = String(format: "Tabletop live: %.0f fps, %d view(s), %@ layout, head %@", fps, views, layout, headTracked ? "tracked" : "fallback pose")
+            }
         }
 
         var ist = GXXRInputStats()

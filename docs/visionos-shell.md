@@ -9,6 +9,10 @@ Metal test tabletop and a GLES 3.0 test tabletop that goes through ANGLE exactly
 
 Sources live in `visionos/`. Build and run scripts live in `scripts/build/visionos/`.
 
+**Update (engine host, `docs/visionos-engine-host.md`):** the engine is linked into the app and runs on its own thread; the compositor
+loop in this document no longer runs GL. Where this document describes the protocol between the compositor and the engine / test scene, the
+sections "Rendering paths", "GPU-GPU synchronisation", "Lifecycle" and "Engine attach guide" below were rewritten for that design.
+
 ## Build
 
 Requires Xcode with the visionOS SDK, `xcodegen` (`brew install xcodegen`) and a built ANGLE.
@@ -35,6 +39,12 @@ scripts/build/visionos/build-shell.sh device --derived-data /tmp/GeneralsZHXR-DD
 # ANGLE from somewhere else / as a signed, embedded dylib instead of static libs
 GX_ANGLE_ROOT=/path/to/angle/install GX_ANGLE_LINK=shared scripts/build/visionos/build-shell.sh simulator
 ```
+
+`build-shell.sh` links the Zero Hour engine (`GeneralsZHEngine.xcframework`, `docs/BUILD/VISIONOS.md`). When the slice is missing it builds it first
+(`build-engine.sh` + `make-xcframework.sh`; a few minutes for the simulator, 15+ for the device) or, with `--no-build-engine`, prints the exact commands.
+`GX_ENGINE_XCFRAMEWORK` overrides the location (default `build/xcframework/GeneralsZHEngine.xcframework`). The slice's archive is linked by path from
+the xcframework (not as an Xcode framework dependency: Xcode would publish the xcframework's module map, an umbrella over C++ headers, and the bridging
+header could not import `GXEngineHost.h`).
 
 Both print the built `.app` path on the last line. The generated `visionos/GeneralsZHXR.xcodeproj` is git-ignored.
 For a signed device build open that project in Xcode and select your own team. Do not commit team IDs.
@@ -71,7 +81,8 @@ Launch arguments:
 | `-autoImmersive` | open the immersive space on launch |
 | `-layout layered\|shared\|dedicated` | force the compositor texture layout (the simulator offers shared and dedicated) |
 | `-externalEyeTextures` | direct-Metal scene rendered into offscreen per-eye textures, submitted through `XRPresentation_SubmitEyeTexture` |
-| `-angleTestScene` | GLES 3.0 test scene through ANGLE into the host target ring (this document, "ANGLE path") |
+| `-angleTestScene`, `-fakeEngine` | the GLES 3.0 test scene as an engine client on the ENGINE thread (`docs/visionos-engine-host.md` section 10); `-fakeEngineBoot S`, `-fakeEngineStall S`, `-fakeEngineFps N` |
+| `-autoStartEngine` | start the real engine as soon as game data is ready |
 | `-angleEyeScale <f>` | ring eye targets = drawable viewport x f (default 1.0; the simulator viewport is 3840x2160) |
 | `-angleAtlas` | pack both eyes side by side into one STEREO_LEFT target (contract `atlas`/`eyeRect`) |
 | `-angleSync glfinish` | force the CPU `glFinish` fallback instead of MTLSharedEvent fences |
@@ -82,17 +93,15 @@ Launch arguments:
 ## Rendering paths
 
 ```
-                        render thread (GXXR.Compositor, one per immersive-space lifetime)
- default        Metal test scene ------------------------------> compositor drawable
- -external...   Metal test scene -> offscreen eye texture ------> XRPresentation_SubmitEyeTexture -> composite
- -angleTestScene / engine
-                ANGLE (GLES3) -> ring slot (MTLTextures, imported as GL textures)
-                          | glFlush + MTLSharedEvent signal        (GPU-GPU, no CPU stall)
-                          v
-                Metal composite (waits on the event) -> compositor drawable (+ world-anchored layers)
-                          | MTLSharedEvent signal "slot free"
-                          v
-                next use of the slot (CPU waits only if the compositor is > 2 frames behind)
+ compositor thread "GXXR.Compositor" (one per immersive-space lifetime; Metal only)
+ no engine    Metal test scene -------------------------------------------> compositor drawable
+ -external... Metal test scene -> offscreen eye texture -> SubmitEyeTexture -> composite
+ engine mode  head mailbox <- XRFrameInfo + device anchor of every display frame
+              frame mailbox -> latest COMPLETED engine frame: composite its ring slot (waits on the GL event), drawable anchor = that frame's anchor
+              nothing published yet -> Metal loading indicator
+
+ engine thread "GXXR.Engine" (owns the ANGLE context; the real engine or the fake engine)
+              head -> ring slot -> d3d8gles_SetXRHostTargets -> engine frame -> glFlush + MTLSharedEvent signal -> publish (slot, XRFrameInfo, anchor)
 ```
 
 ### Host module `visionos/ANGLE/`
@@ -102,7 +111,7 @@ Launch arguments:
   immersive space); each render loop makes it current on its thread and releases it on exit. Exposes
   `eglGetProcAddress` as the resolver for the engine, ANGLE's `MTLDevice`, the GL renderer string and whether
   `EGL_ANGLE_metal_shared_event_sync` / `EGL_ANGLE_metal_texture_client_buffer` exist.
-* `GXXRTargetRing`: 3 slots. Each slot has one `MTLTexture` per named target of the d3d8gles contract
+* `GXXRTargetRing`: 4 reference-counted slots (`docs/visionos-engine-host.md` section 5). Each slot has one `MTLTexture` per named target of the d3d8gles contract
   (`D3D8GLES_XRT_STEREO_LEFT/RIGHT` at eye size, `GAME/WORLD/UI` at independent sizes), created from **ANGLE's**
   device (`RenderTarget | ShaderRead`, private storage, RGBA8Unorm with BGRA8Unorm fallback), imported once per slot
   into a GL texture name (`eglCreateImageKHR(EGL_METAL_TEXTURE_ANGLE)` + `glEGLImageTargetTexture2DOES`) and checked
@@ -110,9 +119,9 @@ Launch arguments:
   with `setSizeWidth:height:forTarget:` / `configureStereoEyeWidth:...`; a change drains the ring and re-creates the
   affected targets (this is how a drawable resize is handled). `teardown` deletes every GL name/sync and drops the
   textures.
-* `GXXRGLTestScene`: the GLSL ES 3.00 test renderer (see "Test scenes").
-* `GXXRHostFrameClient.h` + `Bridge/GXXRBridgeHost.h`: the protocol an engine bridge implements and
-  `GXXRBridgeSetHostFrameClient()` to install it (see "Engine attach guide").
+* `GXXRGLTestScene`, `GXXRFakeEngine`: the GLSL ES 3.00 test renderer as an engine-thread client (see "Test scenes").
+* `GXXRFrameMailbox`, `Bridge/GXXREngineSession`: the head / frame mailboxes and the services the engine thread uses (see "Engine attach guide").
+  (`GXXRHostFrameClient` / `GXXRBridgeSetHostFrameClient` were removed: the compositor no longer calls a client.)
 * `Platform/GXXRD3D8GLES.h`: identical copy of the d3d8gles host-targets contract
   (`D3D8GLES_XRT_*`, `D3D8GLES_XRHostTarget`, `D3D8GLES_XRTargets`, `d3d8gles_SetXRHostTargets`, the
   `getProcAddress`/`flags` config additions). It must stay in sync with `d3d8gles.h`.
@@ -136,14 +145,15 @@ been observed there.
 
 ANGLE renders on its own `MTLCommandQueue`; the composite runs on the compositor queue. Per frame:
 
-1. `ring beginFrame`: pick the next slot, CPU-wait (normally 0 ms) until the *release* event reached the value the
-   previous composite of this slot will signal.
+1. `ring beginFrame` (engine thread): pick a slot whose reference count is 0 and take the writer reference (wait, bounded, when all are in use).
 2. GL rendering into the slot.
-3. `ring endGLWork`: `eglCreateSync(EGL_SYNC_METAL_SHARED_EVENT_ANGLE, glEvent, n)` followed by `glFlush()`. ANGLE
-   commits its command buffer and signals `glEvent` with value `n` on the GPU when the work completes.
-4. `ring encodeWaitForGLInto:cb` puts `encodeWaitForEvent(glEvent, n)` at the start of the compositor command buffer.
-5. Composite passes sample the slot's textures.
-6. `ring encodeReleaseInto:cb` appends `encodeSignalEvent(releaseEvent, m)`.
+3. `ring endGLWork` (engine thread): `eglCreateSync(EGL_SYNC_METAL_SHARED_EVENT_ANGLE, glEvent, n)` followed by `glFlush()`. ANGLE commits its
+   command buffer and signals `glEvent` with value `n` on the GPU when the work completes. The slot's value `n` is remembered.
+4. Publish: the writer reference moves to the frame mailbox.
+5. `ring encodeWaitForGLSlot:into:cb` (compositor thread) puts `encodeWaitForEvent(glEvent, n)` at the start of every composite command buffer that samples the slot.
+6. Composite passes sample the slot's textures.
+7. `ring releaseSlot:afterCommandBuffer:` drops the composite's reference when that command buffer has COMPLETED on the GPU (`addCompletedHandler`).
+   There is no GPU-side release event any more: the completed handler is the release. The engine thread reuses a slot only at count 0.
 
 **Mechanism actually used: `EGL_ANGLE_metal_shared_event_sync` (present in this ANGLE build).** The `glFinish`
 fallback exists and is selectable with `-angleSync glfinish`, but it costs about 4.4 - 5.3 ms of CPU per frame in the
@@ -202,82 +212,34 @@ These are CPU times; GPU time is not measured. The same numbers are in `GXXRBrid
 
 ### Lifecycle
 
-* One render loop thread per immersive-space lifetime; a global mutex makes a re-opened space's loop wait until the
-  previous loop has torn down its ring/scene and released the ANGLE context. The context itself is never destroyed.
-* A frame from `cp_layer_renderer_query_next_frame` can become invalid at any moment (the space closes, the layer
-  pauses). If `cp_frame_query_drawables` returns no drawables the loop must NOT call `cp_frame_end_submission`; doing so
-  aborts the process. The loop drops the frame and re-reads the layer state.
-* While the layer is paused the loop does no GL and no Metal work (it polls the layer state).
-* On layer invalidation the loop drains the ring (waits for the last composite), lets the client detach
-  (`hostWillDetach`), deletes the ring's GL textures/syncs and test-scene GL objects with the context current, releases
-  the context, stops ARKit and exits.
-* `-cycleImmersive N` exercises this: `visionos/Renderer/ImmersiveCycleDriver.swift` is a SwiftUI `ViewModifier`
-  that closes and re-opens the space N times. It has to be applied once in a SwiftUI view that owns the environment
-  actions: add `.modifier(ImmersiveCycleDriver())` to `LauncherView`'s body (that file belongs to the launcher/app
-  package, so it is not wired in this package). It is inert without the launch argument.
+* One compositor loop thread per immersive-space lifetime; a global mutex makes a re-opened space's loop wait for the previous loop to finish. The ANGLE context,
+  the ring, the mailboxes and the engine live on / with the engine thread and are never torn down by a loop ending: closing and re-opening the space restarts only the loop.
+* A frame from `cp_layer_renderer_query_next_frame` can become invalid at any moment (the space closes, the layer pauses). If `cp_frame_query_drawables` returns no
+  drawables the loop must NOT call `cp_frame_end_submission`; doing so aborts the process. The loop drops the frame and re-reads the layer state.
+* While the layer is paused the loop does no Metal work (it polls the layer state) and the engine thread is parked (`GX_PAUSE_LAYER`).
+* `-cycleImmersive N` exercises this (`visionos/Renderer/ImmersiveCycleDriver.swift`, applied in `LauncherView`): with the fake engine running, the ring was
+  allocated once and survived every re-open (`docs/visionos-engine-host.md` section 12).
 
 ## Engine attach guide
 
-What the engine bridge (package C) must do, in order. Names are the ones in `visionos/ANGLE/` and
-`visionos/Platform/GXXRD3D8GLES.h`.
+Changed protocol (the earlier "client called from the compositor loop" design is gone). An engine (or a test client) attaches to the ENGINE thread, not the compositor:
 
-**Once, before the immersive space opens** (any thread):
+1. Implement `GXEngineClient` (`GeneralsMD/Code/Main/visionos/GXEngineHostServices.h`): `boot` (ANGLE context current on the engine thread; `getProcAddress`,
+   `eglDisplay`, `eglContext` and the `D3D8GLES_XRFLAG_*` flags arrive in `GXHostGLInfo`), `describe` (which ring targets / sizes the next frame needs, from the head
+   snapshot), `frame`, `setPaused`, `shutdown`. Start it with `GXEngineHost_StartClient` (the real engine is started with `GXEngineHost_Start`).
+2. `frame` receives `GXHostFrame`: `info` (the newest head/eye `XRFrameInfo` the compositor published: poses, fov, matrices, viewports; reverse-Z Metal convention, an engine
+   that wants forward-Z GL builds its own projection from `fov`, `depth_near_m`, `depth_far_m`) and `targets` (the ring slot as a `struct D3D8GLES_XRTargets`).
+   Per frame: `d3d8gles_SetXRHostTargets(frame->targets)`; run the engine frame; `d3d8gles_InvalidateCachedState()` after any host GL use. Do NOT `glFlush`/`glFinish`,
+   and do not call any Metal or compositor API: `endFrame` does the flush + signal and publishes.
+3. Fill `GXHostFrameOutput`: `stereoValid` (the stereo targets hold a picture), `atlas`, `focus` (a world point, the table, for the constant depth of the eye composite) and
+   `layers[]` (world-anchored quads: which ring target, pose, size, `GX_LAYER_FLIP_Y | GX_LAYER_PREMULTIPLIED` for GL bottom-up coverage-premultiplied targets).
+4. The compositor composites exactly that from the published slot with the eye matrices and device anchor the frame was rendered with. The layer poses in the output must be the
+   poses the interaction layer picks against (`VisionPanel`), see `docs/visionos-interaction.md` section 9.
 
-1. Implement `id<GXXRHostFrameClient>` and call `GXXRBridgeSetHostFrameClient(client)`
-   (`visionos/Bridge/GXXRBridgeHost.h`). From then on the bridge runs the ANGLE path (context, ring, sync,
-   composite) whether or not `-angleTestScene` is given.
-
-**Every time a render loop starts** (`-hostDidAttachWithContext:ring:`; first loop and every re-opened space; the ANGLE
-context is current, the engine survives between calls):
-
-2. Resolver and config, first time only: `D3D8GLES_XRConfig cfg = {}; cfg.eglDisplay = ctx.eglDisplay;
-   cfg.eglContext = ctx.eglContext; cfg.getProcAddress = ctx.getProcAddress; cfg.flags = D3D8GLES_XRFLAG_NO_MULTIVIEW
-   (| D3D8GLES_XRFLAG_FORCE_ATLAS when `ring.atlas`)`, then the existing `d3d8gles_SetXRConfig(&cfg)`. Boot the engine
-   once per process; on later attaches only remember the new `ring`.
-3. Declare the non-stereo targets: `[ring setSizeWidth:1280 height:720 forTarget:D3D8GLES_XRT_GAME]` (and `WORLD`,
-   `UI`); 0 x 0 disables a target. The stereo pair is sized by the bridge from the eye viewports each frame.
-   Set `ring.atlas = YES` before the first frame to use one atlas target.
-
-**Every frame** (`-renderFrame:`, on the render thread; the bridge has already made the context current and called
-`[ring beginFrame]`, i.e. the slot is acquired and safe to write):
-
-4. `struct D3D8GLES_XRTargets t; [ring fillTargets:&t]; d3d8gles_SetXRHostTargets(&t);`
-5. Run the engine frame (`XrGameBoot_Frame` equivalent) with the per-eye matrices from `frame->eyes[i]`
-   (`world_from_view`, `fov`, `pose`, `clip_from_view` is reverse-Z Metal convention: an engine that wants forward-Z GL
-   builds its own from `fov` and `depth_near_m` / `depth_far_m`).
-6. `d3d8gles_InvalidateCachedState()` after any host GL use (the ring's lazy allocation runs inside `beginFrame`,
-   before step 4, and counts as host GL use only for the previous frame's cached state; call it once at the top of
-   the frame as well if the engine caches GL state across frames).
-7. Submit the eyes: for each eye, `XREyeSubmit s = {}; s.eye_index = i; s.texture = (__bridge void*)[ring
-   textureForTarget:(atlas ? D3D8GLES_XRT_STEREO_LEFT : i == 0 ? D3D8GLES_XRT_STEREO_LEFT : D3D8GLES_XRT_STEREO_RIGHT)];
-   s.width/height = eye size; s.flags = XR_SUBMIT_PREMULTIPLIED_ALPHA | XR_SUBMIT_FLIP_Y; s.render_pose = eye.pose;
-   s.render_fov = eye.fov; XRPresentation_SubmitEyeTexture(&s);` and return `XR_FRAME_SUBMITTED_TEXTURES`.
-8. Optionally implement `-compositeLayersForFrame:` returning `GXXRCompositeLayer`s (for example
-   `[GXXRCompositeLayer layerWithName:@"ui" texture:[ring textureForTarget:D3D8GLES_XRT_UI] position:... orientation:...
-   sizeMeters:... flipY:YES]`, positioned from `XRPresentation_GetTabletopPlacement`).
-
-**Done by the bridge after `renderFrame:` returns (the client must not do these)**:
-
-9. `[ring endGLWork]` (glFlush + shared-event signal, or `glFinish` fallback), `[ring encodeWaitForGLInto:cb]`, the
-   Metal composite of the submitted textures and layers, `[ring encodeReleaseInto:cb]`, commit.
-
-**When the loop ends** (`-hostWillDetach`, context still current): drop everything that references the ring's GL
-textures (the engine's FBOs that had them attached must be re-created or re-attached at the next attach; the engine
-gets fresh GL names from `fillTargets:` on the next loop). Do not shut the engine down.
-
-Notes for the engine side that the test scene already exercises:
-
-* The GL names in `D3D8GLES_XRTargets` **rotate** through three sets (one per ring slot), so the backend has to
-  re-attach the texture to its framebuffer object every frame (or when the name differs from the cached one). Caching an
-  FBO with the previous frame's attachment would render into a texture the compositor is still reading.
-* Loop over `frame->eye_count` eyes: the simulator gives one view, a headset two (`dedicated` or `shared` layout). With
-  `ring.atlas` both eyes go into the one STEREO_LEFT target at `eyeRect[e]` and the bridge samples that rectangle.
-* Use `-angleTestScene` (or `GXXRBridgeSetHostFrameClient(nil)`) to check the host without the engine: if the test scene
-  is right and the engine picture is not, the fault is on the engine side.
-* Simulator numbers to compare against: 60 fps, about 0.3 ms of host CPU per frame in total (see "Measured results").
-
-Rules: the GL names in `D3D8GLES_XRTargets` are valid for that frame only; never `glReadPixels` from them; never call
-GL on any thread but the render thread; only the render thread may make the ANGLE context current.
+Rules that did not change: the GL names in the targets are valid for that frame only and rotate between slots (re-attach the texture to your FBO every frame); never
+`glReadPixels` from them; only the engine thread may use GL or make the ANGLE context current; loop over `frame->info.eye_count` eyes (one in the simulator); with
+`ring.atlas` both eyes go into the one STEREO_LEFT target at `eyeRect[e]`.
+Use `-fakeEngine` to check the host without the engine: if the fake engine's picture is right and the engine's is not, the fault is on the engine side.
 
 ## Engine integration seam (Platform headers)
 
@@ -290,6 +252,7 @@ The engine targets the C headers in `visionos/Platform/` (no Apple types):
 | `PlatformFilesystem.h` | app data dir, game data dir, security-scoped access |
 | `PlatformLifecycle.h` | pause / resume / suspend / memory / terminate |
 | `GXXRD3D8GLES.h` | host-side mirror of the d3d8gles host-targets contract |
+| `GXEngineHost.h`, `GXEngineHostServices.h` (in `GeneralsMD/Code/Main/visionos`) | engine host API and the services / client seam (engine thread) |
 
 ## Game data
 
@@ -298,6 +261,9 @@ No game data ships with the app. The player copies a legally owned Generals / Ze
 let them pick a folder (`LSSupportsOpeningDocumentsInPlace`).
 
 ## Measured results
+
+(Measured with the previous design in which the ANGLE test scene ran on the compositor thread. The current numbers for the decoupled design, with the
+test scene as a fake engine on its own thread, are in `docs/visionos-engine-host.md` section 12.)
 
 All numbers below were measured on the visionOS 26.5 **simulator** (Apple silicon host, Xcode 27.0, Debug build,
 `-layout dedicated` unless stated) while the machine was heavily shared with other builds and simulators (load average

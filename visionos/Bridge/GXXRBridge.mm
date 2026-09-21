@@ -5,8 +5,13 @@
 //     submission -> per-drawable encode/present) on a dedicated thread;
 //   * track the head with ARKit's world-tracking provider and set the device
 //     anchor on every drawable (needed for correct late-stage reprojection);
-//   * translate drawable views into the platform-neutral XRFrameInfo and call
-//     the registered XRFrameCallback (default: the temporary test tabletop);
+//   * translate drawable views into the platform-neutral XRFrameInfo;
+//   * ENGINE MODE (an engine or the fake engine was started): publish that snapshot to the engine thread (lock
+//     protected mailbox) and composite the LATEST COMPLETED published engine frame, with the drawable's device anchor
+//     set to the anchor that frame was rendered with so the system reprojects correctly; keep presenting the last
+//     frame while the engine boots or stalls (a Metal loading indicator when nothing was published yet). This thread
+//     NEVER touches GL and never waits for the engine;
+//   * otherwise call the registered XRFrameCallback / draw the built-in Metal test tabletop;
 //   * composite eye textures submitted through XRPresentation_SubmitEyeTexture;
 //   * place the tabletop in front of the initial head pose.
 //
@@ -34,13 +39,14 @@
 #include "XRInteraction.h"
 #include "XRPresentation.h"
 
-#import "GXXRANGLEContext.h"
-#import "GXXRBridgeHost.h"
-#import "GXXRGLTestScene.h"
+#import "GXXREngineSession.h"
+#import "GXXRFrameMailbox.h"
 #import "GXXRMetalRenderer.h"
+#import "GXXRStatusPanel.h"
 #import "GXXRTargetRing.h"
 #import "GXXRTestScene.h"
 #import "ShaderTypes.h"
+#include "GXEngineHost.h"
 #include "GXXRD3D8GLES.h"
 
 // ---------------------------------------------------------------------------
@@ -71,7 +77,6 @@ struct Shared {
     std::atomic<int> sessionState{XR_SESSION_IDLE};
     std::atomic<bool> recenterRequested{false};
     std::atomic<bool> optExternalEyeTextures{false};
-    std::atomic<bool> optAngleTestScene{false};
     std::atomic<uint32_t> loopGeneration{0};
 
     bool placementValid = false;
@@ -170,47 +175,8 @@ simd_float4x4 Translation(float x, float y, float z) {
     return m;
 }
 
-// ---- ANGLE launch options (test/bring-up switches, read straight from the process arguments) ----
-
-struct AngleOptions {
-    bool testScene = false;
-    bool atlas = false;
-    bool forceGLFinish = false;
-    bool noUIPanel = false;
-    float eyeScale = 1.0f;
-    MTLPixelFormat format = MTLPixelFormatRGBA8Unorm;
-};
-
-const AngleOptions& LaunchAngleOptions() {
-    static AngleOptions o = [] {
-        AngleOptions r;
-        NSArray<NSString*>* a = NSProcessInfo.processInfo.arguments;
-        for (NSUInteger i = 0; i < a.count; ++i) {
-            NSString* arg = a[i];
-            NSString* next = i + 1 < a.count ? a[i + 1] : @"";
-            if ([arg isEqualToString:@"-angleTestScene"]) r.testScene = true;
-            else if ([arg isEqualToString:@"-angleAtlas"]) r.atlas = true;
-            else if ([arg isEqualToString:@"-angleNoUIPanel"]) r.noUIPanel = true;
-            else if ([arg isEqualToString:@"-angleSync"] && [next isEqualToString:@"glfinish"]) r.forceGLFinish = true;
-            else if ([arg isEqualToString:@"-angleEyeScale"]) r.eyeScale = std::max(0.1f, std::min(2.0f, next.floatValue));
-            else if ([arg isEqualToString:@"-angleTargetFormat"]) r.format = [next isEqualToString:@"bgra"] ? MTLPixelFormatBGRA8Unorm : MTLPixelFormatRGBA8Unorm;
-        }
-        return r;
-    }();
-    return o;
-}
-
-// Client registered through GXXRBridgeSetHostFrameClient (the engine bridge).
-id<GXXRHostFrameClient> gHostClient = nil;
-std::mutex gHostClientMutex;
-
-id<GXXRHostFrameClient> HostClient() {
-    std::lock_guard<std::mutex> lock(gHostClientMutex);
-    return gHostClient;
-}
-
-// One frame-loop thread at a time. The ANGLE context (and, later, the engine's GL objects) outlive
-// every loop, so a re-opened immersive space's loop must wait for the previous one to release it.
+// One frame-loop thread at a time: a re-opened immersive space's loop waits for the previous one to finish.
+// (The ANGLE context, the ring and the engine live on the engine thread and survive every loop.)
 std::mutex gLoopMutex;
 
 }  // namespace
@@ -272,15 +238,10 @@ void GXXRBridgeGetStatus(GXXRBridgeStatus* out) {
 void GXXRBridgeSetBoolOption(const char* key, bool value) {
     if (!key) return;
     if (strcmp(key, "externalEyeTextures") == 0) Sh().optExternalEyeTextures.store(value);
-    else if (strcmp(key, "angleTestScene") == 0) Sh().optAngleTestScene.store(value);
+    else if (strcmp(key, "angleTestScene") == 0 && value) GXXRBridgeStartFakeEngine();
 }
 
 void GXXRBridgeRecenter(void) { XRPresentation_Recenter(); }
-
-void GXXRBridgeSetHostFrameClient(id<GXXRHostFrameClient> client) {
-    std::lock_guard<std::mutex> lock(gHostClientMutex);
-    gHostClient = client;
-}
 
 void GXXRBridgeNotifyLifecycle(int32_t event) { PlatformLifecycle_Notify((PlatformLifecycleEvent)event); }
 
@@ -312,17 +273,23 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
     GXXRMetalRenderer* _renderer;
     GXXRTestScene* _testScene;
 
-    // ANGLE (GLES 3.0 on Metal) path
-    GXXRANGLEContext* _angle;
-    GXXRTargetRing* _ring;
-    id<GXXRHostFrameClient> _glClient;
-    GXXRGLTestScene* _glScene;
-    bool _angleActive;
-    float _angleEyeScale;
+    // Engine mode (engine thread + decoupled compositor). Metal side only: no GL on this thread, ever.
+    GXXREngineSession* _session;
+    GXXRStatusPanel* _statusPanel;
+    bool _deviceChecked;
+    bool _devicesMatch;
+    bool _indicatorPlaced;
+    simd_float3 _indicatorCenter;
+    GXEngineHostStatus _hostStatus;      // refreshed at 4 Hz (the log tail read is not per-frame work)
+    CFTimeInterval _hostStatusAt;
+    bool _statusPanelVisible;
+    uint64_t _lastCompositedSeq;
 
     // 1 s timing window (CPU ms, summed per frame)
-    double _accGL, _accSync, _accComposite, _accFrame;
+    double _accComposite, _accFrame;
     uint64_t _accFrames;
+    uint32_t _winNewFrames, _winRepeats;
+    double _winMaxAgeMs;
 
     ar_session_t _arSession;
     ar_world_tracking_provider_t _worldProvider;
@@ -376,7 +343,8 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
     }
     const bool external = Sh().optExternalEyeTextures.load();
     _testScene = [[GXXRTestScene alloc] initWithRenderer:_renderer externalEyeTextures:external];
-    [self setUpANGLE];
+    _statusPanel = [[GXXRStatusPanel alloc] initWithDevice:_device];
+    _session = [GXXREngineSession shared];
 
     // Head tracking. World tracking needs the world-sensing usage string in Info.plist.
     if (ar_world_tracking_provider_is_supported()) {
@@ -409,77 +377,12 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
     return YES;
 }
 
-- (void)setUpANGLE {
-    const AngleOptions& opt = LaunchAngleOptions();
-    id<GXXRHostFrameClient> hostClient = HostClient();
-    if (!(hostClient || opt.testScene || Sh().optAngleTestScene.load())) return;
-    _angleEyeScale = opt.eyeScale;
-    GXXRANGLEContext* ctx = [GXXRANGLEContext sharedContext];
-    if (!ctx || ![ctx makeCurrent]) {
-        SetMessage("ANGLE unavailable; using the direct-Metal test scene (see log)");
-        fprintf(stderr, "[GXXR] ANGLE unavailable; falling back to the direct-Metal test scene\n");
-        return;
-    }
-    _angle = ctx;
-    const bool same = [ctx checkDeviceMatchesCompositorDevice:_device];
-    _ring = [[GXXRTargetRing alloc] initWithContext:ctx pixelFormat:opt.format slotCount:3];
-    _ring.forceGLFinish = opt.forceGLFinish;
-    _ring.atlas = opt.atlas;
-    if (!_ring) {
-        SetMessage("ANGLE target ring failed; using the direct-Metal test scene");
-        [ctx releaseCurrent];
-        _angle = nil;
-        return;
-    }
-    if (hostClient) {
-        _glClient = hostClient;
-        if ([hostClient respondsToSelector:@selector(hostDidAttachWithContext:ring:)]) [hostClient hostDidAttachWithContext:ctx ring:_ring];
-    } else {
-        _glScene = [[GXXRGLTestScene alloc] initWithContext:ctx ring:_ring];
-        if (!_glScene) {
-            SetMessage("GLES3 test scene failed to build; using the direct-Metal test scene");
-            [_ring teardown];
-            _ring = nil;
-            [ctx releaseCurrent];
-            _angle = nil;
-            return;
-        }
-        if (opt.noUIPanel) [_ring setSizeWidth:0 height:0 forTarget:D3D8GLES_XRT_UI];
-        _glClient = _glScene;
-    }
-    _angleActive = true;
-    Shared& s = Sh();
-    std::lock_guard<std::mutex> lock(s.mutex);
-    s.status.angleActive = true;
-    s.status.devicesMatch = same;
-    snprintf(s.status.renderer, sizeof(s.status.renderer), "%s", ctx.rendererString.UTF8String);
-    snprintf(s.status.syncMode, sizeof(s.status.syncMode), "%s", _ring.usesSharedEventSync ? "metal-shared-event" : "glFinish");
-}
-
-- (void)tearDownANGLE {
-    if (!_angle) return;
-    [_angle makeCurrent];
-    if ([_glClient respondsToSelector:@selector(hostWillDetach)]) [_glClient hostWillDetach];
-    [_glScene teardown];
-    _glScene = nil;
-    _glClient = nil;
-    [_ring teardown];
-    _ring = nil;
-    [_angle releaseCurrent];
-    _angle = nil;
-    _angleActive = false;
-    Shared& s = Sh();
-    std::lock_guard<std::mutex> lock(s.mutex);
-    s.status.angleActive = false;
-}
-
 - (void)run {
     // Only one loop at a time: a re-opened immersive space's loop waits here until the previous
     // one has torn down its per-loop resources and released the process-wide ANGLE context.
     std::lock_guard<std::mutex> loopLock(gLoopMutex);
     @autoreleasepool {
         if (_cancelled.load() || ![self setUp]) {
-            [self tearDownANGLE];
             SetSessionState(XR_SESSION_INVALIDATED);
             return;
         }
@@ -489,7 +392,7 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
             std::lock_guard<std::mutex> lock(s.mutex);
             s.status.loopGeneration = generation;
         }
-        fprintf(stderr, "[GXXR] render loop generation %u started (angle=%d)\n", generation, (int)_angleActive);
+        fprintf(stderr, "[GXXR] compositor loop generation %u started (engine active=%d)\n", generation, (int)GXEngineHost_IsActive());
     }
     cp_layer_renderer_state lastState = (cp_layer_renderer_state)0;
     uint64_t frameCounter = 0;
@@ -512,12 +415,15 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
                 if (state == cp_layer_renderer_state_running) {
                     SetSessionState(XR_SESSION_RUNNING);
                     PlatformLifecycle_Notify(PLATFORM_LIFECYCLE_RESUME);
+                    GXEngineHost_Pause(GX_PAUSE_LAYER, false);   // the engine thread resumes (audio, input) and produces frames
                 } else if (state == cp_layer_renderer_state_paused) {
                     SetSessionState(XR_SESSION_PAUSED);
                     PlatformLifecycle_Notify(PLATFORM_LIFECYCLE_PAUSE);
+                    GXEngineHost_Pause(GX_PAUSE_LAYER, true);    // the engine thread parks; we stop presenting engine frames
                 } else if (state == cp_layer_renderer_state_invalidated) {
                     SetSessionState(XR_SESSION_INVALIDATED);
                     PlatformLifecycle_Notify(PLATFORM_LIFECYCLE_TERMINATE);
+                    GXEngineHost_Pause(GX_PAUSE_LAYER, true);
                 }
             }
             if (state == cp_layer_renderer_state_invalidated) break;
@@ -594,22 +500,46 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
                         _dbgHeadY, _dbgFovDeg[0], _dbgFovDeg[1], _dbgFovDeg[2], _dbgFovDeg[3], _dbgViewportW, _dbgViewportH);
                 if (_accFrames > 0) {
                     const double n = (double)_accFrames;
+                    const double span = std::max(1e-3, now - windowStart);
+                    const bool engineMode = GXEngineHost_IsActive();
+                    GXEngineHostStatus hs;
+                    GXEngineHost_GetStatus(&hs);
                     {
                         Shared& s = Sh();
                         std::lock_guard<std::mutex> lock(s.mutex);
-                        s.status.glSubmitMs = _accGL / n;
-                        s.status.syncWaitMs = _accSync / n;
+                        s.status.glSubmitMs = hs.lastFrameMs;
+                        s.status.syncWaitMs = 0;
                         s.status.compositeMs = _accComposite / n;
                         s.status.frameMs = _accFrame / n;
-                        s.status.releaseTimeouts = _ring ? _ring.releaseTimeouts : 0;
+                        s.status.releaseTimeouts = hs.framesSkipped;
+                        s.status.engineMode = engineMode;
+                        s.status.engineFps = hs.engineFps;
+                        s.status.newFramesPerSec = (double)_winNewFrames / span;
+                        s.status.repeatFramesPerSec = (double)_winRepeats / span;
+                        s.status.frameAgeMs = _winMaxAgeMs;
+                        s.status.angleActive = engineMode;
+                        s.status.devicesMatch = _devicesMatch;
+                        snprintf(s.status.renderer, sizeof(s.status.renderer), "%s", hs.renderer);
+                        snprintf(s.status.syncMode, sizeof(s.status.syncMode), "%s", hs.syncMode);
                     }
-                    fprintf(stderr, "[GXXR] timing (CPU ms/frame over %llu frames): glSubmit=%.3f syncWait=%.3f composite=%.3f total=%.3f | angle=%d sync=%s ring=%.0fMB | %s\n",
-                            (unsigned long long)_accFrames, _accGL / n, _accSync / n, _accComposite / n, _accFrame / n, (int)_angleActive,
-                            _angleActive ? (_ring.usesSharedEventSync ? "metal-shared-event" : "glFinish") : "-",
-                            _ring ? (double)_ring.allocatedBytes / (1024.0 * 1024.0) : 0.0,
-                            _angleActive ? _angle.rendererString.UTF8String : "(direct Metal)");
-                    _accGL = _accSync = _accComposite = _accFrame = 0;
+                    if (engineMode) {
+                        static const char* const kPhase[] = {"idle", "booting", "running", "paused", "failed", "stopping"};
+                        fprintf(stderr,
+                                "[GXXR] pipeline: compositor=%.1f fps | engine(%s)=%.1f fps (produced %llu, skipped %llu, last %.0f ms, longest %.0f ms) | "
+                                "new frames/s=%.1f repeats/s=%.1f | frame age max=%.0f ms | composite=%.3f ms, total=%.3f ms | ring %u/%u in use, %s | %s%s\n",
+                                fps, kPhase[std::min<int>(hs.phase, 5)], hs.engineFps, (unsigned long long)hs.framesProduced,
+                                (unsigned long long)hs.framesSkipped, hs.lastFrameMs, hs.longestFrameMs, (double)_winNewFrames / span,
+                                (double)_winRepeats / span, _winMaxAgeMs, _accComposite / n, _accFrame / n, hs.ringSlotsInUse, hs.ringSlots,
+                                hs.syncMode[0] ? hs.syncMode : "-", hs.waitingForCompositor ? "engine waiting for compositor " : "",
+                                _statusPanelVisible ? "loading indicator" : "engine frames");
+                    } else {
+                        fprintf(stderr, "[GXXR] timing (CPU ms/frame over %llu frames): composite=%.3f total=%.3f | direct Metal scene\n",
+                                (unsigned long long)_accFrames, _accComposite / n, _accFrame / n);
+                    }
+                    _accComposite = _accFrame = 0;
                     _accFrames = 0;
+                    _winNewFrames = _winRepeats = 0;
+                    _winMaxAgeMs = 0;
                 }
                 windowStart = now;
                 windowFrames = 0;
@@ -617,7 +547,8 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
         }
     }
 
-    [self tearDownANGLE];
+    // The engine, its GL context and the ring survive this loop (the immersive space may re-open): only park it.
+    if (GXEngineHost_IsActive()) GXEngineHost_Pause(GX_PAUSE_LAYER, true);
 
     if (_arRunning) {
         ar_session_stop(_arSession);
@@ -650,15 +581,19 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
     // ---- Head pose: ARKit device anchor predicted for the presentation time. ----
     simd_float4x4 worldFromDevice = Translation(0.0f, kFallbackHeadHeight, 0.0f);
     bool tracked = false;
+    ar_device_anchor_t anchor = nil;
     if (_worldProvider) {
-        ar_device_anchor_t anchor = ar_device_anchor_create();
-        const ar_device_anchor_query_status_t qs = ar_world_tracking_provider_query_device_anchor_at_timestamp(_worldProvider, presentTime, anchor);
-        if (qs == ar_device_anchor_query_status_success && ar_device_anchor_is_tracked(anchor)) {
-            cp_drawable_set_device_anchor(drawable, anchor);
-            worldFromDevice = ar_device_anchor_get_origin_from_anchor_transform(anchor);
+        ar_device_anchor_t query = ar_device_anchor_create();
+        const ar_device_anchor_query_status_t qs = ar_world_tracking_provider_query_device_anchor_at_timestamp(_worldProvider, presentTime, query);
+        if (qs == ar_device_anchor_query_status_success && ar_device_anchor_is_tracked(query)) {
+            anchor = query;
+            worldFromDevice = ar_device_anchor_get_origin_from_anchor_transform(query);
             tracked = true;
         }
     }
+    // Engine mode sets the drawable's anchor itself (the anchor of the frame it presents); every other path uses this one.
+    const bool engineMode = GXEngineHost_IsActive();
+    if (!engineMode && anchor) cp_drawable_set_device_anchor(drawable, anchor);
 
     // ---- Tabletop placement (first tracked frame, or fallback after a timeout, or on recenter). ----
     const bool recenter = sh.recenterRequested.exchange(false);
@@ -775,19 +710,17 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
     cb.label = @"GXXR frame";
     info.command_buffer = (__bridge void*)cb;
 
-    // ---- ANGLE path: acquire a ring slot sized to the eye viewport before the client renders. ----
-    bool ringFrame = false;
-    double syncWaitMs = 0;
-    if (_angleActive && viewCount > 0) {
-        const XRRect& vp0 = info.eyes[0].viewport;
-        const int ew = std::max(64, (int)std::lround(vp0.width * _angleEyeScale));
-        const int eh = std::max(64, (int)std::lround(vp0.height * _angleEyeScale));
-        [_ring configureStereoEyeWidth:ew height:eh eyeCount:(int)viewCount];
-        ringFrame = [_ring beginFrame];
-        syncWaitMs += _ring.lastSyncWaitMs;
+    if (engineMode) {
+        [self encodeEngineFrame:drawable info:info anchor:anchor commandBuffer:cb viewCount:viewCount firstColor:firstColor firstDepth:firstDepth
+                     firstSlice:firstSlice presented:presented];
+        [cb commit];
+        _accFrame += (CACurrentMediaTime() - tFrame0) * 1000.0;
+        _accFrames++;
+        return tracked;
     }
+    _statusPanelVisible = false;
 
-    // ---- Client callback (engine or the default test scene). ----
+    // ---- Client callback (registered XRFrameCallback, or the built-in Metal test scene). ----
     XRFrameCallback userCb;
     void* userData;
     {
@@ -797,30 +730,17 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
     }
     memset(sh.submitted, 0, sizeof(sh.submitted));
     sh.inFrame = true;
-    const CFTimeInterval tGL0 = CACurrentMediaTime();
     XRFrameResult result = XR_FRAME_SKIP;
     if (viewCount > 0) {
         if (userCb) result = userCb(userData, &info);
-        else if (_angleActive) result = ringFrame ? [_glClient renderFrame:&info] : XR_FRAME_SKIP;
         else result = [_testScene renderFrame:&info];
     }
     sh.inFrame = false;
-    double glFinishMs = 0;  // CPU wait inside endGLWork (glFinish fallback only)
-    if (ringFrame) {
-        [_ring endGLWork];  // glFlush + signal the slot's shared event (or glFinish fallback)
-        glFinishMs = _ring.lastSyncWaitMs - syncWaitMs;
-        syncWaitMs = _ring.lastSyncWaitMs;
-    }
-    const CFTimeInterval tGL1 = CACurrentMediaTime();
 
     const CFTimeInterval tComp0 = CACurrentMediaTime();
     if (result == XR_FRAME_SUBMITTED_TEXTURES) {
-        if (ringFrame) [_ring encodeWaitForGLInto:cb];  // GPU-GPU: composite waits for ANGLE's work on this slot
-        NSArray<GXXRCompositeLayer*>* layers = nil;
-        if (ringFrame && [_glClient respondsToSelector:@selector(compositeLayersForFrame:)]) layers = [_glClient compositeLayersForFrame:&info];
-
-        // Constant reverse-Z depth for the engine image: the compositor needs depth for reprojection and
-        // system-window occlusion and the engine has no depth to share, so use the tabletop distance.
+        // Constant reverse-Z depth for a submitted image: the compositor needs depth for reprojection and
+        // system-window occlusion and the client has no depth to share, so use the tabletop distance.
         float wfb[16];
         float hx = 0, hz = 0;
         const bool hasBoard = XRPresentation_GetTabletopPlacement(wfb, &hx, &hz);
@@ -835,45 +755,20 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
             if (sub.flags & XR_SUBMIT_FLIP_Y) flags |= GXXR_COMPOSITE_FLIP_Y;
             if (!(sub.flags & XR_SUBMIT_PREMULTIPLIED_ALPHA)) flags |= GXXR_COMPOSITE_PREMULTIPLY;
             if (![GXXRMetalRenderer isSRGBFormat:src.pixelFormat]) flags |= GXXR_COMPOSITE_SRGB_DECODE;  // gamma values in a UNORM target
-            simd_float4 uvRect = simd_make_float4(0, 0, 1, 1);
-            if (ringFrame && _ring.atlas) uvRect = simd_make_float4(0.5f * (float)vi, 0, 0.5f, 1);
-
-            float depthNdc = 0.0f;
-            if (hasBoard) {
-                const simd_float3 boardPos = simd_make_float3(wfb[12], wfb[13], wfb[14]);
-                const simd_float3 eyePos = simd_make_float3(e.pose.position.x, e.pose.position.y, e.pose.position.z);
-                const float dist = simd_length(boardPos - eyePos);
-                simd_float4x4 proj;
-                memcpy(&proj, e.clip_from_view, sizeof(proj));
-                const simd_float4 clip = simd_mul(proj, simd_make_float4(0, 0, -dist, 1));
-                if (clip.w > 1e-6f) depthNdc = std::min(1.0f, std::max(0.0f, clip.z / clip.w));
-            }
-
+            const float depthNdc = hasBoard ? [self constantDepthForEye:e focus:simd_make_float3(wfb[12], wfb[13], wfb[14])] : 0.0f;
             const bool first = composed.insert((uint32_t)(e.texture_index << 16 | e.array_slice)).second;
             MTLViewport vp = {(double)e.viewport.x, (double)e.viewport.y, (double)e.viewport.width, (double)e.viewport.height, 0.0, 1.0};
             [_renderer encodeEyeCompositeInto:cb
                                        source:src
                                         flags:flags
-                                       uvRect:uvRect
+                                       uvRect:simd_make_float4(0, 0, 1, 1)
                                 constantDepth:depthNdc
                                         color:(__bridge id<MTLTexture>)e.color_target
                                    colorSlice:e.array_slice
                                         depth:(__bridge id<MTLTexture>)e.depth_target
                                      viewport:vp
                                         clear:first];
-            if (layers.count > 0) {
-                simd_float4x4 clipFromWorld;
-                memcpy(&clipFromWorld, e.clip_from_world, sizeof(clipFromWorld));
-                [_renderer encodeLayers:layers
-                                   into:cb
-                                  color:(__bridge id<MTLTexture>)e.color_target
-                             colorSlice:e.array_slice
-                                  depth:(__bridge id<MTLTexture>)e.depth_target
-                               viewport:vp
-                          clipFromWorld:clipFromWorld];
-            }
         }
-        if (ringFrame) [_ring encodeReleaseInto:cb];  // slot may be rewritten once the compositor read it
     } else if (result == XR_FRAME_SKIP && firstColor) {
         [_renderer encodeClearInto:cb color:firstColor colorSlice:firstSlice depth:firstDepth];
         (*skipped)++;
@@ -883,12 +778,176 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
     cp_drawable_encode_present(drawable, cb);
     [cb commit];
     if (result != XR_FRAME_SKIP) (*presented)++;
-    _accGL += (tGL1 - tGL0) * 1000.0 - glFinishMs;
-    _accSync += syncWaitMs;
     _accComposite += (tComp1 - tComp0) * 1000.0;
     _accFrame += (CACurrentMediaTime() - tFrame0) * 1000.0;
     _accFrames++;
     return tracked;
+}
+
+/// Constant reverse-Z depth (NDC) of a plane through `focus`, projected with the eye's own projection: what the
+/// compositor writes for every opaque pixel of a submitted eye image so system reprojection sees a plane there.
+- (float)constantDepthForEye:(const XREyeView&)e focus:(simd_float3)focus {
+    const simd_float3 eyePos = simd_make_float3(e.pose.position.x, e.pose.position.y, e.pose.position.z);
+    const float dist = simd_length(focus - eyePos);
+    simd_float4x4 proj;
+    memcpy(&proj, e.clip_from_view, sizeof(proj));
+    const simd_float4 clip = simd_mul(proj, simd_make_float4(0, 0, -dist, 1));
+    return clip.w > 1e-6f ? std::min(1.0f, std::max(0.0f, clip.z / clip.w)) : 0.0f;
+}
+
+/// Engine mode: publish this display frame's head/eye snapshot to the engine thread, then composite the LATEST COMPLETED
+/// engine frame (or the loading indicator when there is none). Never waits for the engine, never touches GL.
+- (void)encodeEngineFrame:(cp_drawable_t)drawable
+                     info:(XRFrameInfo&)info
+                   anchor:(ar_device_anchor_t)anchor
+            commandBuffer:(id<MTLCommandBuffer>)cb
+                viewCount:(size_t)viewCount
+               firstColor:(id<MTLTexture>)firstColor
+               firstDepth:(id<MTLTexture>)firstDepth
+               firstSlice:(NSUInteger)firstSlice
+                presented:(uint64_t*)presented {
+    GXXRFrameMailbox* mailbox = _session.mailbox;
+    if (!_deviceChecked && _session.context) {
+        _devicesMatch = [_session.context checkDeviceMatchesCompositorDevice:_device];
+        _deviceChecked = true;
+    }
+    [mailbox publishHeadInfo:&info anchor:anchor];
+
+    GXXRTargetRing* ring = mailbox.ring;
+    GXXRPublishedFrame* pf = ring ? [mailbox acquireLatestFrame] : nil;  // takes a ring-slot reference for this composite
+    const CFTimeInterval tComp0 = CACurrentMediaTime();
+    _statusPanelVisible = (pf == nil);
+
+    if (pf) {
+        // The system reprojects from the pose the picture was RENDERED for, so the drawable carries that frame's anchor.
+        if (pf.anchor) cp_drawable_set_device_anchor(drawable, pf.anchor);
+        else if (anchor) cp_drawable_set_device_anchor(drawable, anchor);
+        const XRFrameInfo& pinfo = pf->info;
+        const GXHostFrameOutput& out = pf->output;
+        if (pf.seq != _lastCompositedSeq) {
+            _lastCompositedSeq = pf.seq;
+            _winNewFrames++;
+        } else {
+            _winRepeats++;
+        }
+        _winMaxAgeMs = std::max(_winMaxAgeMs, (CACurrentMediaTime() - pf.publishTime) * 1000.0);
+
+        [ring encodeWaitForGLSlot:pf.slot into:cb];  // GPU-GPU: composite waits for ANGLE's work on this slot
+
+        // World-anchored layers (UI / game / world textures of this slot).
+        NSMutableArray<GXXRCompositeLayer*>* layers = [NSMutableArray arrayWithCapacity:out.layerCount];
+        for (uint32_t i = 0; i < out.layerCount && i < GX_HOST_MAX_LAYERS; ++i) {
+            const GXHostLayer& l = out.layers[i];
+            id<MTLTexture> tex = [ring textureForTarget:l.target slot:pf.slot];
+            if (!tex) continue;
+            GXXRCompositeLayer* layer = [GXXRCompositeLayer layerWithName:[NSString stringWithUTF8String:l.name]
+                                                                  texture:tex
+                                                                 position:simd_make_float3(l.position[0], l.position[1], l.position[2])
+                                                              orientation:simd_quaternion(l.orientation[0], l.orientation[1], l.orientation[2], l.orientation[3])
+                                                               sizeMeters:simd_make_float2(l.size[0], l.size[1])
+                                                                    flipY:(l.flags & GX_LAYER_FLIP_Y) != 0];
+            layer.premultipliedAlpha = (l.flags & GX_LAYER_PREMULTIPLIED) != 0;
+            [layers addObject:layer];
+        }
+
+        float wfb[16];
+        float hx = 0, hz = 0;
+        const bool hasBoard = XRPresentation_GetTabletopPlacement(wfb, &hx, &hz);
+        const simd_float3 focus = out.hasFocus ? simd_make_float3(out.focus[0], out.focus[1], out.focus[2])
+                                               : (hasBoard ? simd_make_float3(wfb[12], wfb[13], wfb[14]) : simd_make_float3(0, 0, 0));
+        const bool hasFocus = out.hasFocus || hasBoard;
+
+        std::set<uint32_t> composed;
+        bool drewAnything = false;
+        for (size_t vi = 0; vi < viewCount; ++vi) {
+            const XREyeView& e = info.eyes[vi];                                           // this drawable's view: target, viewport
+            const uint32_t pi = std::min<uint32_t>((uint32_t)vi, pinfo.eye_count > 0 ? pinfo.eye_count - 1 : 0);
+            const XREyeView& pe = pinfo.eyes[pi];                                         // the eye the frame was rendered for
+            const bool first = composed.insert((uint32_t)(e.texture_index << 16 | e.array_slice)).second;
+            const MTLViewport vp = {(double)e.viewport.x, (double)e.viewport.y, (double)e.viewport.width, (double)e.viewport.height, 0.0, 1.0};
+            id<MTLTexture> colorTex = (__bridge id<MTLTexture>)e.color_target;
+            id<MTLTexture> depthTex = (__bridge id<MTLTexture>)e.depth_target;
+            bool cleared = false;
+            if (out.stereoValid) {
+                const int target = out.atlas ? D3D8GLES_XRT_STEREO_LEFT : (pi == 0 ? D3D8GLES_XRT_STEREO_LEFT : D3D8GLES_XRT_STEREO_RIGHT);
+                id<MTLTexture> src = [ring textureForTarget:target slot:pf.slot];
+                if (src) {
+                    uint32_t flags = GXXR_COMPOSITE_FLIP_Y;  // GL targets are bottom-up, coverage-premultiplied
+                    if (![GXXRMetalRenderer isSRGBFormat:src.pixelFormat]) flags |= GXXR_COMPOSITE_SRGB_DECODE;
+                    const simd_float4 uvRect = out.atlas ? simd_make_float4(0.5f * (float)pi, 0, 0.5f, 1) : simd_make_float4(0, 0, 1, 1);
+                    [_renderer encodeEyeCompositeInto:cb source:src flags:flags uvRect:uvRect
+                                        constantDepth:hasFocus ? [self constantDepthForEye:pe focus:focus] : 0.0f
+                                                color:colorTex colorSlice:e.array_slice depth:depthTex viewport:vp clear:first];
+                    cleared = true;
+                    drewAnything = true;
+                }
+            }
+            if (!cleared && first && colorTex) {
+                [_renderer encodeClearInto:cb color:colorTex colorSlice:e.array_slice depth:depthTex];
+            }
+            if (layers.count > 0) {
+                // Layers are placed in world space and drawn with the eye the frame was RENDERED with (the drawable's
+                // anchor is that frame's anchor, so the system's reprojection carries them to the present head pose).
+                simd_float4x4 clipFromWorld;
+                memcpy(&clipFromWorld, pe.clip_from_world, sizeof(clipFromWorld));
+                [_renderer encodeLayers:layers into:cb color:colorTex colorSlice:e.array_slice depth:depthTex viewport:vp clipFromWorld:clipFromWorld];
+                drewAnything = true;
+            }
+        }
+        if (drewAnything) (*presented)++;
+        [ring releaseSlot:pf.slot afterCommandBuffer:cb];  // the slot is reusable after the LAST composite that read it completes
+    } else {
+        // Nothing published yet (boot, boot failure): a simple Metal loading indicator, world anchored where the player looks.
+        if (anchor) cp_drawable_set_device_anchor(drawable, anchor);
+        CFTimeInterval now = CACurrentMediaTime();
+        if (now - _hostStatusAt > 0.25) {
+            GXEngineHost_GetStatus(&_hostStatus);
+            _hostStatusAt = now;
+        }
+        NSString* title;
+        NSString* detail;
+        BOOL spinner = YES;
+        const GXEngineHostStatus& hs = _hostStatus;
+        if (hs.phase == GX_ENGINE_FAILED) {
+            title = @"Engine stopped";
+            detail = [NSString stringWithFormat:@"%s\nLog: %s", hs.lastError, hs.logPath];
+            spinner = NO;
+        } else if (hs.phase == GX_ENGINE_BOOTING) {
+            title = hs.fake ? @"Starting fake engine" : @"Starting the engine";
+            detail = [NSString stringWithFormat:@"%s (%.0f s)\n%s", hs.progress, hs.bootSeconds, hs.lastLogLine];
+        } else {
+            title = @"Waiting for the first frame";
+            detail = hs.waitingForCompositor ? @"Waiting for a head pose" : @(hs.progress);
+        }
+        if (!_indicatorPlaced) {
+            const simd_float3 head = simd_make_float3(info.head_pose.position.x, info.head_pose.position.y, info.head_pose.position.z);
+            simd_float3 fwd = simd_make_float3(-info.world_from_head[8], 0.0f, -info.world_from_head[10]);
+            if (simd_length(fwd) < 1e-3f) fwd = simd_make_float3(0.0f, 0.0f, -1.0f);
+            // Below the launcher window that normally hangs at the same spot, so it is never hidden behind it.
+            _indicatorCenter = head + simd_normalize(fwd) * 0.9f - simd_make_float3(0, 0.32f, 0);
+            _indicatorPlaced = true;
+        }
+        const simd_float3 viewer = simd_make_float3(info.head_pose.position.x, info.head_pose.position.y, info.head_pose.position.z);
+        NSArray<GXXRCompositeLayer*>* layers = [_statusPanel layersWithTitle:title detail:detail spinner:spinner time:now center:_indicatorCenter viewer:viewer];
+        std::set<uint32_t> composed;
+        for (size_t vi = 0; vi < viewCount; ++vi) {
+            const XREyeView& e = info.eyes[vi];
+            const bool first = composed.insert((uint32_t)(e.texture_index << 16 | e.array_slice)).second;
+            const MTLViewport vp = {(double)e.viewport.x, (double)e.viewport.y, (double)e.viewport.width, (double)e.viewport.height, 0.0, 1.0};
+            id<MTLTexture> colorTex = (__bridge id<MTLTexture>)e.color_target;
+            id<MTLTexture> depthTex = (__bridge id<MTLTexture>)e.depth_target;
+            if (first && colorTex) [_renderer encodeClearInto:cb color:colorTex colorSlice:e.array_slice depth:depthTex];
+            if (layers.count > 0) {
+                simd_float4x4 clipFromWorld;
+                memcpy(&clipFromWorld, e.clip_from_world, sizeof(clipFromWorld));
+                [_renderer encodeLayers:layers into:cb color:colorTex colorSlice:e.array_slice depth:depthTex viewport:vp clipFromWorld:clipFromWorld];
+            }
+        }
+        (*presented)++;
+    }
+    (void)firstColor; (void)firstDepth; (void)firstSlice;
+    cp_drawable_encode_present(drawable, cb);
+    _accComposite += (CACurrentMediaTime() - tComp0) * 1000.0;
 }
 
 @end

@@ -59,6 +59,9 @@ targets:
           - $(SRCROOT)/Input
           - $(SRCROOT)/GameData
           - $(SRCROOT)/Platform
+          # Engine host headers (GXEngineHost.h, GXEngineHostServices.h): plain C, included straight from the engine tree so the
+          # relative include of Platform/XRPresentation.h inside them resolves (the xcframework copy is only for linking).
+          - $(SRCROOT)/../GeneralsMD/Code/Main/visionos
           - $(GX_ANGLE_ROOT)/$(PLATFORM_NAME)/include
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_FILE: Resources/Info.plist
@@ -75,6 +78,17 @@ targets:
         GX_ANGLE_LDFLAGS_static: "$(GX_ANGLE_ROOT)/$(PLATFORM_NAME)/lib/libANGLE.a $(GX_ANGLE_ROOT)/$(PLATFORM_NAME)/lib/libtranslator.a -lz -framework QuartzCore -framework CoreGraphics -framework IOSurface -framework Foundation"
         GX_ANGLE_LDFLAGS_shared: "-L$(GX_ANGLE_ROOT)/$(PLATFORM_NAME)/lib -lANGLE-shared"
         LD_RUNPATH_SEARCH_PATHS: "@executable_path/Frameworks"
+        # System frameworks / libraries the merged engine archive needs (link-flags.txt written by make-xcframework.sh;
+        # build-shell.sh passes the file's current content). This default is the list recorded for the reference build.
+        # The engine is consumed from GeneralsZHEngine.xcframework (built by build-engine.sh + make-xcframework.sh; path in
+        # GX_ENGINE_XCFRAMEWORK, exported by build-shell.sh, default <repo>/build/xcframework/...) by linking the slice's
+        # archive directly. It is NOT added as an Xcode framework dependency: Xcode would then publish the xcframework's
+        # module map (an umbrella over C++ headers) and the bridging header could not import GXEngineHost.h.
+        GX_ENGINE_XCFRAMEWORK: $(SRCROOT)/../build/xcframework/GeneralsZHEngine.xcframework
+        GX_ENGINE_SLICE: xros-arm64
+        "GX_ENGINE_SLICE[sdk=xrsimulator*]": xros-arm64-simulator
+        GX_ENGINE_LIB: "$(GX_ENGINE_XCFRAMEWORK)/$(GX_ENGINE_SLICE)/libGeneralsZHEngine_all.a"
+        GX_ENGINE_LDFLAGS: "-lpthread -ldl -lm -lobjc -lc++ -framework SystemConfiguration -framework CoreServices -framework AudioToolbox -framework CoreFoundation -framework CoreAudio -framework CoreVideo -framework CoreMedia -framework AVFoundation -framework CoreGraphics -framework Foundation -framework ImageIO -framework MobileCoreServices -framework UIKit -framework QuartzCore"
         OTHER_LDFLAGS:
           - -framework
           - CompositorServices
@@ -83,7 +97,19 @@ targets:
           - -framework
           - Metal
           - "$(GX_ANGLE_LDFLAGS_$(GX_ANGLE_LINK))"
+          - "$(GX_ENGINE_LIB)"
+          - "$(GX_ENGINE_LDFLAGS)"
     preBuildScripts:
+      - name: Check engine xcframework
+        basedOnDependencyAnalysis: false
+        script: |
+          set -e
+          case "$PLATFORM_NAME" in xrsimulator) SLICE=xros-arm64-simulator; FLAG=simulator ;; *) SLICE=xros-arm64; FLAG=device ;; esac
+          XCF="${GX_ENGINE_XCFRAMEWORK:-$SRCROOT/../build/xcframework/GeneralsZHEngine.xcframework}"
+          if [ ! -f "$XCF/$SLICE/libGeneralsZHEngine_all.a" ]; then
+            echo "error: the engine library for $PLATFORM_NAME is missing ($XCF/$SLICE). Build it with: scripts/build/visionos/build-engine.sh --$FLAG && scripts/build/visionos/make-xcframework.sh   (or run scripts/build/visionos/build-shell.sh, which does it)" >&2
+            exit 1
+          fi
       - name: Check ANGLE
         basedOnDependencyAnalysis: false
         script: |

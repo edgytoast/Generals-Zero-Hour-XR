@@ -43,7 +43,14 @@ typedef struct GXXRBridgeStatus {
     double compositeMs;         // CPU ms per frame encoding the Metal composite, 1 s average
     double frameMs;             // CPU ms per frame from submission start to commit, 1 s average
     uint32_t loopGeneration;    // increments every time a (re)opened immersive space starts a render loop
-    uint64_t releaseTimeouts;   // ring-slot release waits that timed out
+    uint64_t releaseTimeouts;   // engine frames skipped because no ring slot was free
+    // ---- appended for the engine thread / decoupled compositor; older readers ignore these ----
+    bool engineMode;            // the compositor presents engine (or fake-engine) frames instead of the built-in scene
+    double engineFps;           // frames the engine thread published per second (1 s window)
+    double newFramesPerSec;     // distinct engine frames composited per second
+    double repeatFramesPerSec;  // display frames that re-presented an older engine frame (engine slower than the display)
+    double frameAgeMs;          // max age of the composited engine frame in the last window
+    bool showingIndicator;      // no engine frame yet: the Metal loading indicator is on screen
 } GXXRBridgeStatus;
 
 /// Hand the layer renderer from CompositorLayer{} to the bridge. Starts the render
@@ -57,11 +64,12 @@ void GXXRBridgeGetStatus(GXXRBridgeStatus* outStatus);
 ///   "externalEyeTextures": render the test scene into offscreen per-eye textures and
 ///     submit them through XRPresentation_SubmitEyeTexture, so the compositor-side
 ///     copy path the real engine will use is exercised.
-///   "angleTestScene": render the GLES 3.0 test scene through ANGLE (Metal) into host-owned
-///     ring targets instead of the direct-Metal scene. Also enabled by the launch argument
-///     -angleTestScene (read by the bridge itself).
+///   "angleTestScene": start the fake engine (the GLES 3.0 test scene as a client on the ENGINE thread, through
+///     the same mailbox / ring / compositor path as the real engine). Same as the launch arguments -fakeEngine
+///     and -angleTestScene, which the app reads.
 /// Other launch arguments read by the bridge: -angleEyeScale <f>, -angleAtlas,
-/// -angleSync glfinish, -angleTargetFormat rgba|bgra, -angleNoUIPanel.
+/// -angleSync glfinish, -angleTargetFormat rgba|bgra, -angleNoUIPanel, -fakeEngineStall SEC, -fakeEngineBoot SEC,
+/// -fakeEngineFps <n> (see ANGLE/GXXRAngleOptions.h).
 void GXXRBridgeSetBoolOption(const char* key, bool value);
 
 /// Ask for the tabletop to be re-placed in front of the current head pose.

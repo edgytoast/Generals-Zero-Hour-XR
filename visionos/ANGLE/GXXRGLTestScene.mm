@@ -178,7 +178,6 @@ const uint16_t kDigits[10] = {0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x
 
 @implementation GXXRGLTestScene {
     GXXRANGLEContext* _ctx;
-    GXXRTargetRing* _ring;
     CFTimeInterval _t0;
 
     gxxr::TestGeometry _geometry;
@@ -195,11 +194,10 @@ const uint16_t kDigits[10] = {0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x
     BOOL _ok;
 }
 
-- (nullable instancetype)initWithContext:(GXXRANGLEContext*)context ring:(GXXRTargetRing*)ring {
+- (nullable instancetype)initWithContext:(GXXRANGLEContext*)context {
     self = [super init];
     if (!self) return nil;
     _ctx = context;
-    _ring = ring;
     _t0 = CACurrentMediaTime();
     _depthRB[0] = _depthRB[1] = 0;
     _depthW[0] = _depthW[1] = _depthH[0] = _depthH[1] = 0;
@@ -237,7 +235,6 @@ const uint16_t kDigits[10] = {0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 
     glGenFramebuffers(1, &_fbo);
-    [ring setSizeWidth:kUIWidth height:kUIHeight forTarget:D3D8GLES_XRT_UI];
     _ok = YES;
     GXXR_LOG("GLES3 test scene ready: %zu vertices, programs linked (GLSL ES 3.00 via ANGLE-Metal)", _geometry.vertices.size());
     return self;
@@ -358,10 +355,9 @@ const uint16_t kDigits[10] = {0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x
     }
 }
 
-- (void)renderUIPanelFrame:(uint64_t)frameIndex time:(float)t {
-    id<MTLTexture> tex = [_ring textureForTarget:D3D8GLES_XRT_UI];
-    if (!tex) return;
-    if (![self prepareFramebufferForColor:[_ring glTextureForTarget:D3D8GLES_XRT_UI] width:kUIWidth height:kUIHeight depthIndex:-1]) return;
+- (void)renderUIPanelFrame:(uint64_t)frameIndex time:(float)t uiTexture:(unsigned)uiTexture {
+    if (!uiTexture) return;
+    if (![self prepareFramebufferForColor:uiTexture width:kUIWidth height:kUIHeight depthIndex:-1]) return;
 
     _uiVerts.clear();
     const float W = kUIWidth, H = kUIHeight;
@@ -425,10 +421,12 @@ const uint16_t kDigits[10] = {0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x
     glDisable(GL_BLEND);
 }
 
-#pragma mark - GXXRHostFrameClient
+#pragma mark - engine client frame
 
-- (XRFrameResult)renderFrame:(const XRFrameInfo*)frame {
-    if (!_ok || frame->eye_count == 0) return XR_FRAME_SKIP;
+- (BOOL)renderFrame:(const XRFrameInfo*)frame targets:(const struct D3D8GLES_XRTargets*)targetsPtr output:(GXHostFrameOutput*)out {
+    memset(out, 0, sizeof(*out));
+    if (!_ok || frame->eye_count == 0 || !targetsPtr) return NO;
+    const struct D3D8GLES_XRTargets& targets = *targetsPtr;
 
     float wfb[16];
     float hx = 0, hz = 0;
@@ -436,10 +434,7 @@ const uint16_t kDigits[10] = {0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x
     const float t = (float)(CACurrentMediaTime() - _t0);
     const simd_float4x4 worldFromBoard = hasBoard ? M(wfb) : matrix_identity_float4x4;
 
-    struct D3D8GLES_XRTargets targets;
-    [_ring fillTargets:&targets];
-
-    XREyeSubmit submits[XR_MAX_EYES] = {};
+    bool any = false;
     for (uint32_t i = 0; i < frame->eye_count && i < XR_MAX_EYES; ++i) {
         const XREyeView& eye = frame->eyes[i];
         const int slot = targets.atlas ? D3D8GLES_XRT_STEREO_LEFT : (i == 0 ? D3D8GLES_XRT_STEREO_LEFT : D3D8GLES_XRT_STEREO_RIGHT);
@@ -466,18 +461,16 @@ const uint16_t kDigits[10] = {0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x
         const simd_float3 eyePos = simd_make_float3(eye.pose.position.x, eye.pose.position.y, eye.pose.position.z);
         [self drawSceneWithClipFromWorld:M(eye.clip_from_world) eyePosition:eyePos worldFromBoard:worldFromBoard hasBoard:hasBoard time:t];
         glDisable(GL_SCISSOR_TEST);
-
-        XREyeSubmit& s = submits[i];
-        s.eye_index = i;
-        s.texture = (__bridge void*)[_ring textureForTarget:slot];
-        s.width = (uint32_t)rect[2];
-        s.height = (uint32_t)rect[3];
-        s.flags = XR_SUBMIT_PREMULTIPLIED_ALPHA | XR_SUBMIT_FLIP_Y;  // GL targets are bottom-up, coverage-premultiplied
-        s.render_pose = eye.pose;
-        s.render_fov = eye.fov;
+        any = true;
+    }
+    out->stereoValid = any;
+    if (hasBoard) {
+        out->hasFocus = true;
+        out->focus[0] = wfb[12]; out->focus[1] = wfb[13]; out->focus[2] = wfb[14];
     }
 
-    [self renderUIPanelFrame:frame->frame_index time:t];
+    const bool uiTarget = targets.slot[D3D8GLES_XRT_UI].glTexture != 0;
+    if (uiTarget) [self renderUIPanelFrame:frame->frame_index time:t uiTexture:targets.slot[D3D8GLES_XRT_UI].glTexture];
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glUseProgram(0);
@@ -490,36 +483,25 @@ const uint16_t kDigits[10] = {0x7B6F, 0x2C97, 0x73E7, 0x73CF, 0x5BC9, 0x79CF, 0x
         }
     }
 
-    bool any = false;
-    for (uint32_t i = 0; i < frame->eye_count && i < XR_MAX_EYES; ++i) {
-        if (submits[i].texture) {
-            XRPresentation_SubmitEyeTexture(&submits[i]);
-            any = true;
-        }
-    }
-    return any ? XR_FRAME_SUBMITTED_TEXTURES : XR_FRAME_SKIP;
-}
-
-- (NSArray<GXXRCompositeLayer*>*)compositeLayersForFrame:(const XRFrameInfo*)frame {
-    id<MTLTexture> ui = [_ring textureForTarget:D3D8GLES_XRT_UI];
-    float wfb[16];
-    float hx = 0, hz = 0;
-    if (!ui || !XRPresentation_GetTabletopPlacement(wfb, &hx, &hz)) return @[];
-    const simd_float4x4 worldFromBoard = M(wfb);
-    // Panel stands to the right of the board (clear of the launcher window that hangs over the far edge),
+    // The UI panel stands to the right of the board (clear of the launcher window that hangs over the far edge),
     // turned to face the player's viewpoint 1.25 m in front of the board center, 0.64 x 0.36 m (16:9).
-    const float px = 0.74f, pz = 0.0f;
-    const simd_float4 p = simd_mul(worldFromBoard, simd_make_float4(px, 0.20f, pz, 1.0f));
-    const simd_float3x3 boardRot = simd_matrix(simd_normalize(worldFromBoard.columns[0].xyz), simd_normalize(worldFromBoard.columns[1].xyz),
-                                               simd_normalize(worldFromBoard.columns[2].xyz));
-    const simd_quatf yaw = simd_quaternion(-std::atan2(px, 1.25f), simd_make_float3(0, 1, 0));
-    GXXRCompositeLayer* layer = [GXXRCompositeLayer layerWithName:@"ui-panel"
-                                                          texture:ui
-                                                         position:p.xyz
-                                                      orientation:simd_mul(simd_quaternion(boardRot), yaw)
-                                                       sizeMeters:simd_make_float2(0.64f, 0.36f)
-                                                            flipY:YES];
-    return @[layer];
+    if (uiTarget && hasBoard) {
+        const float px = 0.74f, pz = 0.0f;
+        const simd_float4 p = simd_mul(worldFromBoard, simd_make_float4(px, 0.20f, pz, 1.0f));
+        const simd_float3x3 boardRot = simd_matrix(simd_normalize(worldFromBoard.columns[0].xyz), simd_normalize(worldFromBoard.columns[1].xyz),
+                                                   simd_normalize(worldFromBoard.columns[2].xyz));
+        const simd_quatf yaw = simd_quaternion(-std::atan2(px, 1.25f), simd_make_float3(0, 1, 0));
+        const simd_quatf q = simd_mul(simd_quaternion(boardRot), yaw);
+        GXHostLayer& l = out->layers[out->layerCount++];
+        memset(&l, 0, sizeof(l));
+        snprintf(l.name, sizeof(l.name), "ui-panel");
+        l.target = D3D8GLES_XRT_UI;
+        l.position[0] = p.x; l.position[1] = p.y; l.position[2] = p.z;
+        l.orientation[0] = q.vector.x; l.orientation[1] = q.vector.y; l.orientation[2] = q.vector.z; l.orientation[3] = q.vector.w;
+        l.size[0] = 0.64f; l.size[1] = 0.36f;
+        l.flags = GX_LAYER_FLIP_Y | GX_LAYER_PREMULTIPLIED;
+    }
+    return any || out->layerCount > 0;
 }
 
 @end

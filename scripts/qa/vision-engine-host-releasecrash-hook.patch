@@ -1,0 +1,37 @@
+diff --git a/Core/GameEngine/Source/Common/System/Debug.cpp b/Core/GameEngine/Source/Common/System/Debug.cpp
+index 8230164..4be3733 100644
+--- a/Core/GameEngine/Source/Common/System/Debug.cpp
++++ b/Core/GameEngine/Source/Common/System/Debug.cpp
+@@ -765,6 +765,12 @@ static void TriggerMiniDump()
+ }
+ 
+ 
++#if defined(GX_PLATFORM_VISIONOS)
++// GeneralsX @feature visionOS port: fatal engine errors must not _exit() the whole app. XrGameBoot.cpp defines this hook; while the
++// engine thread is inside a guarded engine call (boot, frame) it throws, and the host reports the failure. Otherwise it returns.
++void GX_XR_OnReleaseCrash(const char *reason);
++#endif
++
+ void ReleaseCrash(const char *reason)
+ {
+ 	/// do additional reporting on the crash, if possible
+@@ -778,6 +784,9 @@ void ReleaseCrash(const char *reason)
+ 	fprintf(stderr, "[GX-RELEASECRASH] ReleaseCrash reason='%s'\n", reason ? reason : "<null>");
+ 	fprintf(stderr, "[GX-RELEASECRASH] last error dump:\n%s\n", g_LastErrorDump.str());
+ 	fflush(stderr);
++#if defined(GX_PLATFORM_VISIONOS)
++	GX_XR_OnReleaseCrash(reason);
++#endif
+ 
+ 	if (!DX8Wrapper_IsWindowed) {
+ 		if (ApplicationHWnd) {
+@@ -912,6 +921,9 @@ void ReleaseCrashLocalized(const AsciiString& p, const AsciiString& m)
+ 	fprintf(stderr, "[GX-RELEASECRASH] localized crash keys prompt='%s' mesg='%s'\n", p.str(), m.str());
+ 	fprintf(stderr, "[GX-RELEASECRASH] last error dump:\n%s\n", g_LastErrorDump.str());
+ 	fflush(stderr);
++	#if defined(GX_PLATFORM_VISIONOS)
++	GX_XR_OnReleaseCrash(m.str());
++	#endif
+ 	#if defined(SAGE_USE_SDL3)
+ 	// GeneralsX @bugfix Android port 08/07/2026 stderr is invisible on Android;
+ 	// show the same message as a native dialog so the user sees WHY the game

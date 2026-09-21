@@ -11,7 +11,7 @@ struct GeneralsZHXRApp: App {
             LauncherView()
                 .environment(model)
         }
-        .defaultSize(width: 720, height: 640)
+        .defaultSize(width: 760, height: 1000)
 
         // Stereo tabletop rendered with Metal through Compositor Services.
         // .mixed keeps passthrough visible; the layer's alpha channel (premultiplied)

@@ -8,7 +8,10 @@
 #include <EGL/eglext_angle.h>
 #include <GLES3/gl3.h>
 #include <GLES2/gl2ext.h>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
+#include <mutex>
 
 #define GXXR_LOG(fmt, ...) fprintf(stderr, "[GXXR/ring] " fmt "\n", ##__VA_ARGS__)
 
@@ -16,8 +19,8 @@ namespace {
 constexpr NSUInteger kMaxSlots = 4;
 constexpr int kTargets = D3D8GLES_XRT_COUNT;
 constexpr const char* kTargetNames[kTargets] = {"stereoLeft", "stereoRight", "game", "world", "ui"};
-constexpr uint64_t kReleaseWaitTimeoutMs = 250;
-constexpr int kReleaseWaitRetries = 8;  // 2 s in total, then the frame proceeds anyway
+constexpr int kSlotWaitMs = 500;   // -beginFrame waits this long for a free slot, then skips the frame
+constexpr int kDrainWaitMs = 3000; // -drain waits this long for the compositor, then proceeds (logged)
 }  // namespace
 
 @implementation GXXRTargetRing {
@@ -39,12 +42,15 @@ constexpr int kReleaseWaitRetries = 8;  // 2 s in total, then the frame proceeds
     GLuint _gl[kMaxSlots][kTargets];
 
     id<MTLSharedEvent> _glEvent;       // signalled by ANGLE when a slot's GL work is done
-    id<MTLSharedEvent> _releaseEvent;  // signalled by the compositor when it finished reading a slot
-    uint64_t _glValue;
-    uint64_t _releaseValue;
+    uint64_t _glValue;                 // engine thread only
+    EGLSync _slotSync[kMaxSlots];      // engine thread only
+
+    // Slot ownership (see the header): reference counts and the per-slot GL event value are shared between
+    // the engine thread and the compositor thread and guarded by _lock.
+    std::mutex _lock;
+    std::condition_variable _freed;
+    int _refs[kMaxSlots];
     uint64_t _slotGLValue[kMaxSlots];
-    uint64_t _slotReleaseValue[kMaxSlots];
-    EGLSync _slotSync[kMaxSlots];
 
     NSUInteger _next;
     NSUInteger _current;
@@ -64,6 +70,12 @@ constexpr int kReleaseWaitRetries = 8;  // 2 s in total, then the frame proceeds
 - (NSUInteger)currentSlot { return _current; }
 - (double)lastSyncWaitMs { return _syncWaitMs; }
 - (uint64_t)releaseTimeouts { return _timeouts; }
+- (NSUInteger)slotsInUse {
+    std::lock_guard<std::mutex> lock(_lock);
+    NSUInteger n = 0;
+    for (NSUInteger s = 0; s < _slotCount; ++s) n += _refs[s] > 0 ? 1 : 0;
+    return n;
+}
 - (uint64_t)allocatedBytes { return _bytes; }
 
 static NSUInteger BytesPerPixel(MTLPixelFormat) { return 4; }
@@ -87,7 +99,8 @@ static NSUInteger BytesPerPixel(MTLPixelFormat) { return 4; }
     for (int t = 0; t < kTargets; ++t) _reqW[t] = _reqH[t] = _curW[t] = _curH[t] = 0;
     for (NSUInteger s = 0; s < kMaxSlots; ++s) {
         _slotSync[s] = EGL_NO_SYNC;
-        _slotGLValue[s] = _slotReleaseValue[s] = 0;
+        _slotGLValue[s] = 0;
+        _refs[s] = 0;
         for (int t = 0; t < kTargets; ++t) _gl[s][t] = 0;
     }
 
@@ -111,8 +124,7 @@ static NSUInteger BytesPerPixel(MTLPixelFormat) { return 4; }
     }
 
     _glEvent = [_device newSharedEvent];
-    _releaseEvent = [_device newSharedEvent];
-    _sharedEvents = context.supportsSharedEventSync && _glEvent && _releaseEvent;
+    _sharedEvents = context.supportsSharedEventSync && _glEvent;
     GXXR_LOG("ring: %lu slots, format %s, sync=%s", (unsigned long)_slotCount, _format == MTLPixelFormatRGBA8Unorm ? "RGBA8Unorm" : "BGRA8Unorm",
              _sharedEvents ? "EGL_ANGLE_metal_shared_event_sync" : "glFinish (fallback: extension unavailable)");
     return self;
@@ -232,32 +244,38 @@ static NSUInteger BytesPerPixel(MTLPixelFormat) { return 4; }
     }
 }
 
-- (BOOL)waitForRelease:(uint64_t)value {
-    if (value == 0) return YES;
-    for (int attempt = 0; attempt < kReleaseWaitRetries; ++attempt) {
-        if ([_releaseEvent waitUntilSignaledValue:value timeoutMS:kReleaseWaitTimeoutMs]) return YES;
-    }
+- (BOOL)needsResize {
+    for (int t = 0; t < kTargets; ++t)
+        if (_reqW[t] != _curW[t] || _reqH[t] != _curH[t]) return YES;
     return NO;
 }
 
+/// Waits until every slot's reference count is 0 (composites finished). Returns NO on timeout.
+- (BOOL)waitAllFreeTimeoutMs:(int)ms {
+    std::unique_lock<std::mutex> lock(_lock);
+    return _freed.wait_for(lock, std::chrono::milliseconds(ms), [&] {
+        for (NSUInteger s = 0; s < _slotCount; ++s)
+            if (_refs[s] > 0) return false;
+        return true;
+    });
+}
+
 - (void)drain {
-    if (!_releaseEvent) return;
-    const uint64_t last = _releaseValue;
-    if (last > 0 && ![self waitForRelease:last]) GXXR_LOG("drain: compositor did not release (value %llu, signalled %llu)", last, (unsigned long long)_releaseEvent.signaledValue);
+    if (![self waitAllFreeTimeoutMs:kDrainWaitMs]) {
+        GXXR_LOG("drain: %lu slot(s) still referenced after %d ms (compositor stalled); continuing", (unsigned long)self.slotsInUse, kDrainWaitMs);
+    }
     if (!_sharedEvents || _forceGLFinish) return;
     // GL work of every slot must be finished before textures are deleted.
     glFinish();
 }
 
-- (BOOL)beginFrame {
+- (NSInteger)beginFrame {
     _frameOpen = NO;
     _syncWaitMs = 0;
     const CFTimeInterval t0 = CACurrentMediaTime();
 
     // Size changes: drain everything in flight, then rebuild the affected targets.
-    BOOL resized = NO;
-    for (int t = 0; t < kTargets; ++t) resized = resized || (_reqW[t] != _curW[t] || _reqH[t] != _curH[t]);
-    if (resized) {
+    if ([self needsResize]) {
         [self drain];
         for (NSUInteger s = 0; s < _slotCount; ++s) [self destroySyncForSlot:s];
         for (int t = 0; t < kTargets; ++t) {
@@ -265,22 +283,67 @@ static NSUInteger BytesPerPixel(MTLPixelFormat) { return 4; }
             [self releaseTarget:t];
             if (_reqW[t] > 0 && ![self allocateTarget:t]) {
                 _reqW[t] = _reqH[t] = 0;
-                return NO;
+                return -1;
             }
         }
     }
 
-    const NSUInteger s = _next++ % _slotCount;
-    if (![self waitForRelease:_slotReleaseValue[s]]) {
-        _timeouts++;
-        GXXR_LOG("slot %lu release wait timed out (want %llu, have %llu); continuing", (unsigned long)s,
-                 (unsigned long long)_slotReleaseValue[s], (unsigned long long)_releaseEvent.signaledValue);
+    // A free slot: reference count 0. Round-robin from the slot after the last one, so consecutive frames
+    // rotate through the ring (and the compositor's older slot is not touched first).
+    NSInteger picked = -1;
+    {
+        std::unique_lock<std::mutex> lock(_lock);
+        const auto pick = [&]() -> NSInteger {
+            for (NSUInteger i = 0; i < _slotCount; ++i) {
+                const NSUInteger s = (_next + i) % _slotCount;
+                if (_refs[s] == 0) return (NSInteger)s;
+            }
+            return -1;
+        };
+        if (!_freed.wait_for(lock, std::chrono::milliseconds(kSlotWaitMs), [&] { return pick() >= 0; })) {
+            _timeouts++;
+            lock.unlock();
+            GXXR_LOG("no free ring slot within %d ms (%lu in use); skipping this engine frame", kSlotWaitMs, (unsigned long)self.slotsInUse);
+            _syncWaitMs = (CACurrentMediaTime() - t0) * 1000.0;
+            return -1;
+        }
+        picked = pick();
+        _refs[picked] = 1;  // the writer reference
+        _next = (NSUInteger)picked + 1;
     }
-    [self destroySyncForSlot:s];
-    _current = s;
+    [self destroySyncForSlot:(NSUInteger)picked];
+    _current = (NSUInteger)picked;
     _frameOpen = YES;
     _syncWaitMs = (CACurrentMediaTime() - t0) * 1000.0;
-    return YES;
+    return picked;
+}
+
+- (void)abortFrame {
+    if (!_frameOpen) return;
+    _frameOpen = NO;
+    [self releaseSlot:_current];
+}
+
+- (void)retainSlot:(NSUInteger)slot {
+    if (slot >= _slotCount) return;
+    std::lock_guard<std::mutex> lock(_lock);
+    _refs[slot]++;
+}
+
+- (void)releaseSlot:(NSUInteger)slot {
+    if (slot >= _slotCount) return;
+    {
+        std::lock_guard<std::mutex> lock(_lock);
+        if (_refs[slot] > 0) _refs[slot]--;
+    }
+    _freed.notify_all();
+}
+
+- (void)releaseSlot:(NSUInteger)slot afterCommandBuffer:(id<MTLCommandBuffer>)cb {
+    // The block retains self (the ring outlives every command buffer: teardown drains first).
+    [cb addCompletedHandler:^(id<MTLCommandBuffer> _Nonnull) {
+        [self releaseSlot:slot];
+    }];
 }
 
 - (void)fillTargets:(struct D3D8GLES_XRTargets*)out {
@@ -311,6 +374,9 @@ static NSUInteger BytesPerPixel(MTLPixelFormat) { return 4; }
 - (nullable id<MTLTexture>)textureForTarget:(int)t {
     return (t >= 0 && t < kTargets && _curW[t] > 0) ? _tex[_current][t] : nil;
 }
+- (nullable id<MTLTexture>)textureForTarget:(int)t slot:(NSUInteger)slot {
+    return (t >= 0 && t < kTargets && slot < _slotCount && _curW[t] > 0) ? _tex[slot][t] : nil;
+}
 - (unsigned)glTextureForTarget:(int)t { return (t >= 0 && t < kTargets && _curW[t] > 0) ? _gl[_current][t] : 0; }
 - (int)widthForTarget:(int)t { return (t >= 0 && t < kTargets) ? _curW[t] : 0; }
 - (int)heightForTarget:(int)t { return (t >= 0 && t < kTargets) ? _curH[t] : 0; }
@@ -330,7 +396,10 @@ static NSUInteger BytesPerPixel(MTLPixelFormat) { return 4; }
             _glValue--;
         } else {
             _slotSync[s] = sync;  // kept alive until the slot is acquired again
-            _slotGLValue[s] = value;
+            {
+                std::lock_guard<std::mutex> lock(_lock);
+                _slotGLValue[s] = value;
+            }
             glFlush();
             return;
         }
@@ -340,16 +409,15 @@ static NSUInteger BytesPerPixel(MTLPixelFormat) { return 4; }
     _syncWaitMs += (CACurrentMediaTime() - t0) * 1000.0;
 }
 
-- (void)encodeWaitForGLInto:(id<MTLCommandBuffer>)cb {
-    if (!_frameOpen || !(_sharedEvents && !_forceGLFinish) || _slotGLValue[_current] == 0) return;
-    [cb encodeWaitForEvent:_glEvent value:_slotGLValue[_current]];
-}
-
-- (void)encodeReleaseInto:(id<MTLCommandBuffer>)cb {
-    if (!_frameOpen) return;
-    const uint64_t value = ++_releaseValue;
-    [cb encodeSignalEvent:_releaseEvent value:value];
-    _slotReleaseValue[_current] = value;
+- (void)encodeWaitForGLSlot:(NSUInteger)slot into:(id<MTLCommandBuffer>)cb {
+    if (slot >= _slotCount || !(_sharedEvents && !_forceGLFinish)) return;
+    uint64_t value;
+    {
+        std::lock_guard<std::mutex> lock(_lock);
+        value = _slotGLValue[slot];
+    }
+    if (value == 0) return;
+    [cb encodeWaitForEvent:_glEvent value:value];
 }
 
 #pragma mark - Teardown
@@ -363,7 +431,11 @@ static NSUInteger BytesPerPixel(MTLPixelFormat) { return 4; }
         _reqW[t] = _reqH[t] = 0;
     }
     _frameOpen = NO;
-    GXXR_LOG("ring torn down (%llu release timeouts over its life)", (unsigned long long)_timeouts);
+    {
+        std::lock_guard<std::mutex> lock(_lock);
+        for (NSUInteger s = 0; s < _slotCount; ++s) _refs[s] = 0;
+    }
+    GXXR_LOG("ring torn down (%llu no-free-slot timeouts over its life)", (unsigned long long)_timeouts);
 }
 
 @end
