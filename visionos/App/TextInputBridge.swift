@@ -14,6 +14,8 @@ import SwiftUI
 /// `refreshEngine`, driven by the compositor's frame ticks) and keeps this file from needing its own thread or timer
 /// wired into anything else.
 private struct TextInputBridgeModifier: ViewModifier {
+    /// Only one window may show the sheet: the launcher while it is open, the Commands window while the launcher hides.
+    var enabled = true
     /// How often to check `GXEngineHost_TextFieldFocused` while nothing is focused. Once the sheet is up, typing is
     /// local to the TextField (no polling needed) until Cancel/Send hands control back to the engine.
     private static let pollInterval: TimeInterval = 0.2
@@ -25,7 +27,7 @@ private struct TextInputBridgeModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onReceive(Timer.publish(every: Self.pollInterval, on: .main, in: .common).autoconnect()) { _ in
-                guard !focused else { return }  // the sheet owns `text` once it is up; do not clobber player keystrokes
+                guard enabled, !focused else { return }  // the sheet owns `text` once it is up; do not clobber player keystrokes
                 pollFocus()
             }
             .sheet(isPresented: $focused) {
@@ -87,7 +89,7 @@ private struct TextInputBridgeSheet: View {
 public extension View {
     /// Shows the visionOS text-entry sheet (package C2) whenever the engine reports a focused text field. Attach to a
     /// view that stays mounted for the life of the app, such as the launcher window's root view.
-    func textInputBridge() -> some View { modifier(TextInputBridgeModifier()) }
+    func textInputBridge(enabled: Bool = true) -> some View { modifier(TextInputBridgeModifier(enabled: enabled)) }
 }
 
 // Hookup (one additive line; C2 does not own visionos/App/LauncherView.swift so cannot add it directly — see

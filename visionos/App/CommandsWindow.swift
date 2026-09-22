@@ -38,7 +38,19 @@ struct CommandsWindow: View {
         .appWindowStyle()
         .commandsHoverOrnament(store: store)
         .hudOrnament(location: .commands, model: appModel, store: store)
+        .onChange(of: appModel.spaceState) { _, state in
+            // The launcher hides during a match (UIWindowsCoordinator). When the tabletop closes (Leave Tabletop, or the
+            // system dismissed the space) bring it back, so the app never ends up with no window.
+            if state == .closed && !appModel.launcherOpen {
+                openWindow(id: "launcher")
+                dismissWindow(id: CommandsWindow.id)
+            }
+        }
+        .textInputBridge(enabled: !appModel.launcherOpen)
     }
+
+    @Environment(\.openWindow) private var openWindow
+    @Environment(\.dismissWindow) private var dismissWindow
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {

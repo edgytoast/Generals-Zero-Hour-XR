@@ -5,7 +5,6 @@ struct LauncherView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.openImmersiveSpace) private var openImmersiveSpace
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
-    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         @Bindable var model = model
@@ -78,30 +77,19 @@ struct LauncherView: View {
                       allowsMultipleSelection: false) { result in
             model.handlePickerResult(result)
         }
+        .onAppear { model.launcherOpen = true }
+        .onDisappear { model.launcherOpen = false }
         .task {
+            // Once per app run: the launcher can close and reopen, the start-up must not repeat. Status polling and the
+            // scene-phase pause live at app level (AppModel.startAppServices, GeneralsZHXRApp) so they keep working
+            // while this window is closed.
+            guard !model.bootstrapped else { return }
+            model.bootstrapped = true
+            model.startAppServices()
             model.startEngineInfrastructure()
             await model.startGameData()
             model.autoStartEngineIfRequested()
             if LaunchOptions.autoImmersive { await enter() }
-            while !Task.isCancelled {
-                model.refresh()
-                try? await Task.sleep(for: .milliseconds(500))
-            }
-        }
-        .onChange(of: scenePhase) { _, phase in
-            // The engine thread parks (and silences audio) while the scene is not active, exactly like the mobile
-            // background handling of the 2D port; the compositor keeps presenting the last frame meanwhile.
-            GXEngineHost_Pause(GX_PAUSE_SCENE, phase != .active)
-            switch phase {
-            case .background: GXXRBridgeNotifyLifecycle(Int32(PLATFORM_LIFECYCLE_SUSPEND.rawValue))
-            case .active:
-                GXXRBridgeNotifyLifecycle(Int32(PLATFORM_LIFECYCLE_RESUME.rawValue))
-                Task { await model.gameDataBecameActive() }
-            default: break
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in
-            GXXRBridgeNotifyLifecycle(Int32(PLATFORM_LIFECYCLE_MEMORY_WARNING.rawValue))
         }
     }
 

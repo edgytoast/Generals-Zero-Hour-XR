@@ -62,6 +62,8 @@ struct HudOrnament: View {
             .disabled(model.spaceState != .open)
 
             Menu {
+                Button { openWindow(id: "launcher") } label: { Label(store.t("Open Launcher"), systemImage: "house") }
+                    .disabled(model.launcherOpen)
                 Button { openWindow(id: CommandsWindow.id) } label: { Label(store.t("Open Commands"), systemImage: "list.bullet.rectangle") }
                 Button { openWindow(id: SettingsWindow.id) } label: { Label(store.t("Open Settings"), systemImage: "gearshape") }
                 Button { openWindow(id: HelpWindow.id) } label: { Label(store.t("Open Help"), systemImage: "questionmark.circle") }

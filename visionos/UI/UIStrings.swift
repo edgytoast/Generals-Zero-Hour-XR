@@ -45,6 +45,7 @@ enum L10n {
         "Leave Tabletop": "Tabletop verlassen",
         "Enter Tabletop": "Tabletop betreten",
         "Open Commands": "Befehle öffnen",
+        "Open Launcher": "Startfenster öffnen",
         "Open Help": "Hilfe öffnen",
         "Open Settings": "Einstellungen öffnen",
         "Done": "Fertig",

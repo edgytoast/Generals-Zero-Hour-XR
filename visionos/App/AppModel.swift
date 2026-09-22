@@ -27,6 +27,13 @@ final class AppModel {
 
     var inputSummary = "No spatial events yet."
 
+    /// True while the launcher window is on screen. The launcher hides itself while a real match is on the table (it is
+    /// about a metre tall and stood between the player and the board), and the other windows reopen it from this flag.
+    var launcherOpen = false
+    @ObservationIgnored var bootstrapped = false
+    @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var memoryWarningObserver: NSObjectProtocol?
+
     // MARK: Engine (state lives here, logic in AppModel+Engine.swift)
 
     /// Where the engine host is (GXEngineHost_GetStatus), refreshed with everything else in `refresh()`.
@@ -87,6 +94,27 @@ final class AppModel {
         GXXRBridgeAttachLayerRenderer(renderer)
         spaceState = .open
     }
+
+    /// App-lifetime status polling. It belongs to the model, not to a window: a window's `.task` stops when the window
+    /// closes, and the launcher closes while the tabletop is in use.
+    func startAppServices() {
+        guard refreshTask == nil else { return }
+        refreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                self?.refresh()
+                TestInputInjector.poll()
+                try? await Task.sleep(for: .milliseconds(500))
+            }
+        }
+        memoryWarningObserver = NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification, object: nil, queue: .main) { _ in
+            GXXRBridgeNotifyLifecycle(Int32(PLATFORM_LIFECYCLE_MEMORY_WARNING.rawValue))
+        }
+    }
+
+    /// Hide the launcher while the tabletop shows a real game. Test runs keep it (`-keepLauncher`, `-cycleImmersive`
+    /// drives the space from the launcher), and so does the test scene without game data.
+    var hidesLauncherOnTabletop: Bool { isGameDataReady && !LaunchOptions.keepLauncher }
 
     /// Pulls a snapshot from the render thread; called about twice a second.
     func refresh() {
