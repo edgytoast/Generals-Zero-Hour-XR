@@ -104,6 +104,7 @@ typedef struct GXPanelSnapshot {
     bool bookmarkKnown[4];   /* XrGameBoot_BookmarkKnown (map views A-D) */
     int32_t matchResult;     /* XrGameBoot_MatchResult: 0 none, 1 victory, 2 defeat, 3 match over */
     int32_t defaultCameraPreset; /* XrGameBoot_DefaultCameraPreset */
+    int32_t groundViewMode;  /* GXEnginePanelState_SetGroundView (0 off, 1 armed, 2 active) */
     /* XrGameBoot_TacticalReason for the actions the console can disable: [0] = 8 (guard), [1] = 40 (formation),
      * [2] = 41 (force move), [3] = 42 (guard without pursuit). Empty = allowed. */
     char reason[4][160];
@@ -176,6 +177,8 @@ enum {
 };
 
 typedef struct GXPanelActionResult {
+    int32_t page;          /* the page the action was performed on (-1 for GX_EXTRA_*) */
+    int32_t controlId;     /* the control id (or the GX_EXTRA_* number) */
     bool handled;          /* the id was a live control of that page (false: ignored, like a dead gap on the Quest panel) */
     bool engineCalled;     /* at least one engine call was made */
     bool stereoWorld;      /* GX_HOST_STEREO_WORLD */
@@ -200,8 +203,10 @@ enum {
 bool GXPanelAction_Perform(int page, int controlId);
 bool GXPanelAction_PerformExtra(int extra, int value);
 
-/* The Quest switch tables as a pure call for hosts and tests: applies `id` to `session` and the engine behind
- * `bridgeOrNull` ... Not exported to C: see VisionCommandActions.h. */
+/* The host-side effects (GX_HOST_*, stereoWorld, closeMenu, ...) of performed actions, oldest first. The action itself has
+ * already run on the engine thread; the app (SwiftUI) applies what only it can: Ground View, recenter, hiding the console.
+ * Returns false when nothing is pending. Only results that carry an effect or a refused camera call are queued. */
+bool GXPanelAction_PopResult(GXPanelActionResult* out);
 
 /* ---- the snapshot store ------------------------------------------------------------------------------------- */
 
@@ -223,6 +228,10 @@ void GXEnginePanelState_GetPrefs(GXPanelPrefs* out);
 /* Presentation flags only the presentation layer (package C2) knows. Until it calls this the snapshot derives them
  * from the engine (interactiveGame && canStereoWorld, canStereoWorld). */
 void GXEnginePanelState_SetPresentation(bool splitVisible, bool stereoVisible);
+
+/* Ground View state as the interaction layer knows it (0 off, 1 armed, 2 active). Optional: the presentation layer (package
+ * C2) reports it so the panels can show the toggle correctly; without it snapshot.groundViewMode stays 0. */
+void GXEnginePanelState_SetGroundView(int mode);
 
 /* Pixel position (composed engine frame, GameWidth x GameHeight) whose engine tooltip should be refreshed into
  * snapshot.panelHover (throttled to ~5 Hz). x < 0 clears it. For the interaction layer's panel focus. */

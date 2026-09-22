@@ -12,6 +12,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <string>
 
@@ -252,6 +253,9 @@ struct Store {
 	std::atomic<bool> presentationSplit{false}, presentationStereo{false};
 	std::atomic<float> probeX{-1}, probeY{-1};
 	std::atomic<bool> dirty{true};
+	std::atomic<int> groundView{0};
+	std::mutex resultMutex;
+	std::deque<GXPanelActionResult> results; // effects for the app (bounded)
 
 	// engine thread only
 	Clock::time_point lastCapture{};
@@ -315,6 +319,7 @@ void captureScripted(Store &st)
 	std::memset(&fresh, 0, sizeof(fresh));
 	visionCaptureSnapshot(c, st.session, fresh);
 	fresh.engineKind = GX_ENGINE_KIND_SCRIPTED;
+	fresh.groundViewMode = st.groundView.load();
 	const std::string hover = e.WorldHoverInfo();
 	copyText(fresh.worldHover, sizeof(fresh.worldHover), hover);
 	fresh.worldHoverSeq = hover.empty() ? 0 : 1;
@@ -359,6 +364,7 @@ void captureReal(Store &st)
 	std::memset(&fresh, 0, sizeof(fresh));
 	visionCaptureSnapshot(c, session, fresh);
 	fresh.engineKind = GX_ENGINE_KIND_REAL;
+	fresh.groundViewMode = st.groundView.load();
 
 	// Last pinched / hand-pointed target: XrGameBoot_WorldHoverInfo is non-empty only while a spatial pointer is active.
 	const std::string hover = bridge->WorldHoverInfo();
@@ -422,6 +428,13 @@ GXPanelActionResult perform(Store &st, VisionEngineBridge &bridge, VisionCommand
 	else if (page == GX_PANEL_COMMANDS) r = visionApplyCommandAction(st.session, c, id);
 	else r = visionApplyMenuAction(st.session, page, c, id);
 	if (st.session.prefs.language != st.language.load()) st.language.store(st.session.prefs.language);
+	r.page = isExtra ? -1 : page;
+	r.controlId = isExtra ? extra : id;
+	if (r.handled && (r.host != GX_HOST_NONE || r.stereoWorld || r.closeMenu || (isExtra && r.hostValue == 0))) {
+		std::lock_guard<std::mutex> rl(st.resultMutex);
+		if (st.results.size() >= 32) st.results.pop_front();
+		st.results.push_back(r);
+	}
 	return r;
 }
 
@@ -523,6 +536,19 @@ void GXEnginePanelState_SetScripted(int scenario)
 		st.scripted.load(scenario);
 	}
 	st.dirty.store(true);
+}
+
+void GXEnginePanelState_SetGroundView(int mode) { S().groundView.store(mode < 0 ? 0 : mode > 2 ? 2 : mode); }
+
+bool GXPanelAction_PopResult(GXPanelActionResult *out)
+{
+	if (!out) return false;
+	Store &st = S();
+	std::lock_guard<std::mutex> lock(st.resultMutex);
+	if (st.results.empty()) return false;
+	*out = st.results.front();
+	st.results.pop_front();
+	return true;
 }
 
 bool GXEnginePanelState_IsScripted(void) { return S().scriptedScenario != 0; }

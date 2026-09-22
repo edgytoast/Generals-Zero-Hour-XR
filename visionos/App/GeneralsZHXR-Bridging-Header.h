@@ -10,3 +10,7 @@
 #import "GXEngineHost.h"
 // Fake engine (-fakeEngine) entry point.
 #import "GXXREngineSessionC.h"
+// Spatial UI panel state (GeneralsMD/Code/Main/visionos/GXEnginePanelState.h): snapshot, control model, actions. Plain C.
+#import "GXEnginePanelState.h"
+// Audio mixer / spatial-audio switch of the Settings window (defined inside the engine library).
+#import "GXAudioListener.h"
