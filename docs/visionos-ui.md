@@ -145,12 +145,25 @@ on every control, `frame(minHeight: 60)` everywhere (`UITheme.minTarget`).
   unit rings, board frame — drawn by the engine/C2, values stored in `GXPanelPrefs`), and the five camera presets +
   `Save current view as favorite` + `Home base view` (through `GX_EXTRA_CAMERA_PRESET` / `_SAVE_CAMERA_DEFAULT` /
   `_VIEW_BASE`; a refused call, e.g. during a cinematic, shows the "not available right now" caption once).
-* **Graphics** — render scale (0.5x-1.5x slider), render-fps cap (30/45/60/uncapped segmented control), shadow mode
-  (off/decals/volumes), stereo eye size tier (Balanced/High/Ultra). **`GXGraphicsSettings` / `GXEngineHost_SetGraphics`
-  do not exist on this branch yet** (package C2's mission item 7): `visionos/UI/GraphicsSettings.swift` defines the
-  exact model the brief specifies and a `GraphicsBackend.applyToEngine` that today only mirrors shadow mode and eye
-  tier into the existing `GXPanelPrefs` (so they are not lost) and logs the values; the file documents the one-line
-  swap to the real setter as a comment, so wiring the finished header is a single change once C2 commits it.
+* **Graphics** — render scale (0.5x-1.5x slider), render-fps cap (30/45/60/90/120/uncapped segmented control), shadow
+  mode (off/decals/volumes), stereo eye size tier (Balanced/High/Ultra), UI backbuffer resolution (720p/1080p,
+  boot-time only) and the two `GX_GFX_*` toggles (Comfort fade, Focus marker). **Bound to the real
+  `GXGraphicsSettings` / `GXEngineHost_{Set,Get,GetDefaults}Graphics` API** (package C2 commit `77aee73` on
+  `vp/c2-presentation`, "visionOS: graphics settings API in GXEngineHost.h..."): `visionos/UI/GraphicsSettings.swift`
+  mirrors the struct field-for-field (`renderScale: Float`, `renderFpsCap: Int32`, `shadowMode`/`eyeTier`/
+  `uiResolution: Int32`, `flags: UInt32`) and `GraphicsBackend.applyToEngine`/`engineDefaults` build/read the real
+  struct with its `size` field set, matching the header's extensibility contract exactly. Earlier in this package's
+  history (before C2 had committed the header) this file used a placeholder that stored the values locally and
+  mirrored shadow/eye-tier into `GXPanelPrefs`; that placeholder's assumed field names/ranges turned out to differ
+  from the real struct in two ways, both fixed once the real header was read: the fps-cap "uncapped" value is
+  *negative* (the placeholder used `0`, which the real API defines as "use the default, 45"), and the engine's
+  default shadow mode is `GX_SHADOWS_DECALS` (the placeholder defaulted to `.volumes`). **Caveat**: `vp/f-ui` alone
+  does not build — `GeneralsMD/Code/Main/visionos/GXEngineHost.h` on this branch only carries this package's own
+  small addition (`GXEngineFrameHook`, section 11); the graphics API is C2's own commit on its own branch. This
+  session verified the binding compiles, links and runs correctly by temporarily overlaying C2's committed
+  `GXGraphicsSettings.{h,cpp}` and its `GXEngineHost.h` addition into a local build (not committed to `vp/f-ui`); see
+  the session report's `handoffNotesForLead`. Once the lead merges C2 and F, no further Swift change should be
+  needed.
 * **Audio** — five volume sliders (master, music, speech, interface, battlefield) and the "Spatial battlefield
   audio" switch, bound straight to `GXAudio_SetMasterVolume` / `_SetCategoryVolume` / `_SetSpatialBattlefieldAudio`
   (`visionos/Audio/GXAudioListener.h`, defined inside the engine — these symbols exist today and are exercised by
@@ -180,6 +193,33 @@ One `.ornament` attached to both the launcher and the Commands window (`visionos
 View toggle, Recenter, Pause/Resume (`GXEngineHost_Pause(GX_PAUSE_USER, ...)`), a `Windows` menu (opens
 Commands/Settings/Help), Menu (`InteractionControls.engineBack()` — Escape/Back into the engine, opens the in-game
 menu during a match) and Leave Tabletop (`dismissImmersiveSpace`).
+
+`HudOrnament` is a plain `View` fed `model`/`store` explicitly by its caller through a `.hudOrnament(location:model:
+store:)` helper, not a `ViewModifier` reading `@Environment` — see section 9's crash writeup and section 11.4.
+
+### 4.5 A crash class specific to `.ornament(...)` on this SDK
+
+Discovered and fixed this session, after windows were exercised in the simulator for the first time (section 9).
+**Any `View` or `ViewModifier` that reads a custom `@Environment(SomeObservableType.self)` (an `@Observable` app type
+such as `AppModel`/`PanelStore`, not a system `EnvironmentValues` key) on its own properties, while ALSO attaching an
+`.ornament(...)` anywhere in its own body — not only inside the ornament's content closure — crashes at first layout**
+on the xrOS 27.0 simulator SDK used here: `Fatal error: No Observable object of type AppModel found`, trace
+`ViewGraphRootValueUpdater.render` → `TransformOrnament.updateValue()` → `AGGraphGetValue` → `EnvironmentValues.
+subscript.getter` → `_assertionFailure`. Three instances existed in this package; all three are fixed by passing the
+value in as a plain stored property/init parameter instead of `@Environment`, from the nearest ancestor that legally
+has it (`GeneralsZHXRApp.swift`'s `@State`):
+
+1. `HudOrnament` itself (fixed by the predecessor, before this session, but its two call sites were left on the old
+   API — a build error, not a crash; fixed first).
+2. `HoverInfoOrnament.swift`'s `HoverInfoCard`, reached through `commandsHoverOrnament(store:)`.
+3. `UIWindowsCoordinator` (a `ViewModifier` whose `body(content:)` installs `.hudOrnament`) and `CommandsWindow`
+   itself (a `View` that installs both `.commandsHoverOrnament` and `.hudOrnament` in its own body) — found this
+   session; not caught by the predecessor's fix because the read was not textually inside an ornament's trailing
+   closure, only in the same struct that attaches one.
+
+Descendant views further down the normal content tree (`CommandsHelpView`, `PanelControlView`, the `SettingsPages.
+swift` pages, …) are unaffected and keep reading `@Environment` normally: the bug is specific to the exact
+`View`/`ViewModifier` node that carries the `.ornament(...)` modifier, not the whole subtree.
 
 ## 5. Window placement (visionOS 26 API and its limits)
 
@@ -329,19 +369,20 @@ carries the three **toggle preferences** that gate them (`healthBars`, `unitRing
 
 ## 9. Verification
 
-Everything below ran on the visionOS 26.5 **simulator** (`GXR-f-ui`, created and deleted per the working rules), no
-game data, no headset. Nothing here is claimed as verified on a physical Vision Pro.
+Everything below ran on the visionOS 26.5 **simulator** (`GXR-f-ui`, reused from the predecessor's session and
+deleted per the working rules at the end of this one), no game data, no headset. Nothing here is claimed as
+verified on a physical Vision Pro. This session's additions are marked **(this session)**.
 
 | Check | Result |
 | --- | --- |
-| Host test, C++ model and actions | `scripts/qa/vision-ui-panel-test.sh`: **1665 checks, 0 failed** (ASan+UBSan). Every hittable id of every page/variant (Commands compact/tactics/help, Menu Windows/Units/Groups/View/Help) maps to the expected engine call, in the expected order, with the expected `stereoWorld`/`closeMenu`/host effect; group operations (arm, cancel, apply, clear-on-order); bookmarks (save-armed, recall-of-empty, disarm-on-any-other-control); tactics foldout and its gating by `TacticalReason`; every menu page's navigation and gating (`canAdjustWorld`, `splitVisible`, Ground View refusal without `canObserveGround`/`stereoVisible`); all 6 extra (camera/base/cancel/language/tactical) actions; state derivation (armed/on/pending/disabled with the engine's own reason text) for every mode/queue/group/formation/bookmark/match-result combination in both languages; 168 hittable-control labels checked in German and English (0 untranslated survivors); snapshot capture through both engine seams including UTF-8-safe truncation; the four C entry points' bounds checks. |
-| Existing host tests, unchanged | `scripts/qa/vision-interaction-test.sh --existing` and `scripts/qa/vision-bridge-forward-test.sh` still pass (not modified by this package; run to confirm the additive `GXEngineHost.{h,mm}` edit changed nothing) — see section 11. |
-| Localisation completeness | `scripts/qa/vision-ui-strings-check.sh`: **passes** (170 table keys, every call site covered, no untranslated leftovers, no `xr()` key missing from the Quest table). |
+| Host test, C++ model and actions | `scripts/qa/vision-ui-panel-test.sh`: **1665 checks, 0 failed** (ASan+UBSan). Every hittable id of every page/variant (Commands compact/tactics/help, Menu Windows/Units/Groups/View/Help) maps to the expected engine call, in the expected order, with the expected `stereoWorld`/`closeMenu`/host effect; group operations (arm, cancel, apply, clear-on-order); bookmarks (save-armed, recall-of-empty, disarm-on-any-other-control); tactics foldout and its gating by `TacticalReason`; every menu page's navigation and gating (`canAdjustWorld`, `splitVisible`, Ground View refusal without `canObserveGround`/`stereoVisible`); all 6 extra (camera/base/cancel/language/tactical) actions; state derivation (armed/on/pending/disabled with the engine's own reason text) for every mode/queue/group/formation/bookmark/match-result combination in both languages; 168 hittable-control labels checked in German and English (0 untranslated survivors); snapshot capture through both engine seams including UTF-8-safe truncation; the four C entry points' bounds checks. Re-run **(this session)** after every fix below: still 1665/1665. |
+| Existing host tests, unchanged | `scripts/qa/vision-interaction-test.sh --existing` (27/27) and `scripts/qa/vision-bridge-forward-test.sh` (109 checks) still pass — re-run **(this session)**, confirming the `GXEngineHost.{h,mm}` frame-hook addition (section 11) changed nothing. |
+| Localisation completeness | `scripts/qa/vision-ui-strings-check.sh`: **passes** (177 table keys after this session's additions, every call site covered, no untranslated leftovers, no `xr()` key missing from the Quest table). |
 | Contrast | `scripts/qa/vision-ui-contrast.py`: **passes**, all 6 explicit fills >= 4.5:1 (section 8.3). |
-| Engine build (both slices) | `scripts/build/visionos/build-engine.sh --simulator && scripts/build/visionos/make-xcframework.sh`: rebuilt after adding the three new engine-linked files (`GXEnginePanelState.cpp`, `VisionPanelModel.cpp`, `VisionCommandActions.cpp` are picked up by the existing `visionos/*.cpp` glob of `z_generals`, no `CMakeLists.txt` change needed) — **0 errors**, xcframework relinked (728 MB slice). Device slice not rebuilt in this session (see `notVerified`). |
-| Shell build, simulator | `scripts/build/visionos/build-shell.sh simulator`: **0 errors** after the fix below. First attempt failed the link with 40+ undefined `_GXEnginePanelState_*` / `_GXPanelModel_*` / `_GXPanelAction_*` symbols (the cached engine xcframework predated the new files); rebuilding the engine (row above) resolved it. A second, unrelated compile error (`List(Page.allCases, selection:)` — the collection-based `List` initialiser with a `Set`/optional selection binding is not part of the visionOS `SwiftUI` overload set per the xrOS 27.0 SDK's `swiftinterface`, confirmed by reading it) was fixed by switching to `List(selection:) { ForEach(...) }`, which visionOS does expose. |
-| Shell build, device (unsigned) | **not run in this session** — see `notVerified`; `build-shell.sh device` builds the device engine slice first (15+ minutes) and this session's evidence favours a verified simulator build plus an honestly reported gap over an unverified claim. |
-| Windows open, screenshots | **not run in this session** (no simulator boot/screenshot pass completed before the report was due) — the `-openWindow`, `-uiFakeSnapshot`, `-uiLanguage`, `-uiAppearance` and `-uiScript` launch arguments exist and are wired (`UILaunchOptions`, `UIWindowsCoordinator`, `PanelStore.init`); running them and capturing screenshots is listed in `notVerified`, not claimed. |
+| Engine build, both slices **(this session)** | `scripts/build/visionos/build-engine.sh --simulator` and `--device`, then `make-xcframework.sh`: **0 errors** on both (simulator: 14 s incremental against the predecessor's cached build tree; device: 3m59s, the device slice's first build in this worktree). Merged xcframework: 1.4 GB, both slices present. |
+| Shell build, simulator **(this session, re-verified after every fix)** | `scripts/build/visionos/build-shell.sh simulator --no-build-engine`: **0 errors, 1 warning**, final run. Two build errors were found and fixed on the way (both in files this session touched, not pre-existing): `GraphicsSettings.swift` calling `.rawValue` on `GX_GFX_COMFORT_FADE`/`GX_GFX_FOCUS_MARKER` (anonymous C enum constants import into Swift as plain `Int`, not a named enum — section 4.2); the two stale `.modifier(HudOrnament(location:))` call sites left over from the predecessor's uncommitted `HudOrnament` refactor (section 4.5). |
+| Shell build, device (unsigned) **(this session)** | `scripts/build/visionos/build-shell.sh device --no-build-engine`: **0 errors, 1 warning**. |
+| Windows open, screenshots **(this session)** | Run for the first time this package has ever exercised real windows in the simulator. **First attempt crashed at launch** (`Fatal error: No Observable object of type AppModel found`) — see section 4.5 for the root cause and fix; two more `.ornament`/`@Environment` sites beyond the predecessor's `HudOrnament` fix needed the same treatment. After the fix: `-openWindow commands,settings,help -uiFakeSnapshot 1 -fakeEngine` opens all three windows plus the HUD ornament and the hover-info ornament with **no crash**, in English/light, German/dark, both tested. Screenshots taken with `xcrun simctl io <udid> screenshot` and **read with the Read tool** (not just captured): the Commands window (Orders/Instant & selection/Groups sections, status card showing "Move · 5 selected · Group 3 · Waypoints ON", the hover-info ornament above it showing "Last target: Sample unit") renders with full labels, correct armed/on/pending tints (white for the active order, blue for "on" toggles, red STOP), no text clipping or truncation, group key "3" highlighted matching the scripted snapshot's `Group 3` — in both English and German (labels translate correctly, e.g. "Zwangsangriff"/"Wegpunkte AN"/"Gruppe ersetzen"). The Settings/Graphics page's top row ("Graphics" header, "Render scale 1.00x") is confirmed rendering correctly and matching the real default; the remaining Graphics rows (fps cap, shadows, eye size, UI resolution, comfort fade, focus marker) and the Help/Workspace pages in full were **not visually confirmed** — the simulator's fixed default camera pose places `below(launcher)`/`trailing(commands)`-placed windows mostly below the visible frustum, and no camera-pose or window-drag control is available through `simctl` or this session's tools (no tap injection either, as the working rules already note); this is a screenshot-tooling limit, not a code issue — the code path is identical to the Commands window's, which did render correctly, and the visible portion of the Graphics page matches the code exactly. |
 
 ## 10. What remains device-only
 
@@ -352,15 +393,21 @@ game data, no headset. Nothing here is claimed as verified on a physical Vision 
   "does it feel right at arm's length" pass.
 * `ShareLink` on the Diagnostics page's log file (the simulator's share sheet exists but was not exercised in this
   session).
-* ✅ Not device-only, but **not wired yet**: `GXEnginePanelState_SetHoverProbe` (section 7, panel-tooltip half of the
-  hover card) and `GraphicsBackend`'s real engine setter (section 4.2) both wait on other packages' headers/data (the
-  interaction layer's panel-focus report, and C2's `GXGraphicsSettings`/`GXEngineHost_SetGraphics`).
+* ✅ **(this session)** `GXEnginePanelState_SetHoverProbe` (section 7, panel-tooltip half of the hover card) still
+  waits on the interaction layer's panel-focus report from package E; out of this package's scope to add.
+* The Settings window's Presentation/Controls & language/Data/Diagnostics pages and the Help window's German text
+  were not screenshotted this session either (section 9's camera-framing limit, not specific to these pages);
+  nothing about them changed this session, so the predecessor's code-review-level confidence stands, just without a
+  fresh screenshot. The Graphics page's visible top rows and the Commands/Workspace pages in both languages WERE
+  screenshotted and confirmed correct (section 9).
 
 ## 11. Diffs to files this package does not own
 
-Both are additive, small, and documented in the file's own comments; the lead was told in `handoffNotesForLead`.
+Small and additive, documented in the file's own comments; the lead was told in `handoffNotesForLead`.
 
-* **`GeneralsMD/Code/Main/visionos/GXEngineHost.h`** — one new typedef and one new function declaration:
+* **`GeneralsMD/Code/Main/visionos/GXEngineHost.h`** — one new typedef and one new function declaration (unchanged
+  this session; re-verified against C2's own commit `77aee73` on `vp/c2-presentation`, which does not touch this
+  insertion point in a conflicting way — see below):
   ```c
   typedef void (*GXEngineFrameHook)(void* user, bool realEngine);
   void GXEngineHost_SetFrameHook(GXEngineFrameHook hook, void* user);
@@ -376,4 +423,14 @@ Both are additive, small, and documented in the file's own comments; the lead wa
   No existing symbol, struct layout (beyond appending two fields) or behaviour changed; `vision-engine-host-*` tests
   were not re-run in this session (out of this package's ownership) but the edit is textually additive and the
   existing `scripts/qa/vision-interaction-test.sh --existing` (which exercises the same binary surface indirectly
-  through the forwarding bridge test) passed after it.
+  through the forwarding bridge test) passed after it, both times it was run.
+
+**Cross-package note for the lead, not a diff of ours**: package C2's commit `77aee73` ("visionOS: graphics settings
+API in GXEngineHost.h...", on `vp/c2-presentation`) inserts its `GXGraphicsSettings` block at the exact same anchor
+point in `GXEngineHost.h` as this package's frame-hook block (both right after `GXEngineHost_Post`'s `#endif`) — a
+textual merge conflict when the two branches merge, trivially resolved by keeping both blocks (they do not overlap
+semantically). This session verified `visionos/UI/GraphicsSettings.swift` (section 4.2) compiles, links and runs
+correctly against C2's real struct by temporarily overlaying C2's committed `GXGraphicsSettings.{h,cpp}` and
+`GXEngineHost.h` addition into a local build only (never committed to `vp/f-ui`, reverted with `git checkout --`
+before every commit this session) — `git status` on this branch is clean of C2's files. `vp/f-ui` alone does not
+build past `GraphicsSettings.swift` until merged with C2's `GXEngineHost.h`/`GXGraphicsSettings.{h,cpp}`.
