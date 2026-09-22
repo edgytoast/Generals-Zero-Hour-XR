@@ -337,8 +337,11 @@ using gxxr::Range;
 - (void)encodeClearInto:(id<MTLCommandBuffer>)commandBuffer
                   color:(id<MTLTexture>)color
              colorSlice:(NSUInteger)slice
-                  depth:(id<MTLTexture>)depth {
-    id<MTLRenderCommandEncoder> enc = [commandBuffer renderCommandEncoderWithDescriptor:[self passWithColor:color slice:slice depth:depth clear:YES]];
+                  depth:(id<MTLTexture>)depth
+            opaqueBlack:(BOOL)opaqueBlack {
+    MTLRenderPassDescriptor* pass = [self passWithColor:color slice:slice depth:depth clear:YES];
+    if (opaqueBlack) pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);  // Ground View: no passthrough
+    id<MTLRenderCommandEncoder> enc = [commandBuffer renderCommandEncoderWithDescriptor:pass];
     enc.label = @"GXXR clear";
     [enc endEncoding];
 }

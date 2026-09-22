@@ -84,8 +84,16 @@ Engine thread, per frame (`GXEngineHost.mm` loop + `GXEngineHostEngine.cpp`):
 5. `d3d8gles_SetXRHostTargets(targets)`;
 6. `VisionFrameDriver::step` (package E): drains `XRInteraction_PollEvent`, applies gestures through the engine bridge, adopts the board,
    fills eye poses and fov into the `XrWorldFrame`; then `XrGameBoot_SetWorldFrame`, `XrGameBoot_SetSplitEnabled`;
-7. `XrGameBoot_Frame` (the engine frame; the frame limiter sleeps inside it; a map load blocks inside it);
-8. `d3d8gles_InvalidateCachedState()`;
+7. `XrGameBoot_Frame` (the engine frame; the frame limiter sleeps inside it; a map load blocks inside it). A synchronous
+   loader calls back into `GXEngineHostEngine_PresentLoading` (installed via `XrGameBoot_SetLoadingPresenter` in
+   `GXEngineHostEngine_Boot`) from INSIDE this call, without stepping the simulation: it builds a `GXHostFrameOutput`
+   for the upright panel (`VisionPresentation::describeLoading`) and publishes it through `GXEngineHost_PresentNested`
+   into the SAME ring slot the outer call is writing — see `docs/visionos-presentation.md` section 6 for the three
+   outcomes and how the host re-arms `d3d8gles_SetXRHostTargets`;
+8. `d3d8gles_InvalidateCachedState()`; `VisionPresentation::finish` resolves the mode (`docs/visionos-presentation.md`
+   section 1), the composite layers, the feedback (`GXHostFeedback`) and the presentation/text-field status
+   (`GXEngineHost_SetPresentationStatus`, `GXEngineHost_SetTextFieldState` — feed `GXEngineHostStatus.presentationMode`
+   / `.textFieldFocused` / `.textFieldText`);
 9. `endFrame`: `ring endGLWork` (`eglCreateSync(SHARED_EVENT)` + `glFlush`), publish `(slot, XRFrameInfo used, anchor, layers)`.
 
 Compositor thread, per display frame (`GXXRBridge.mm`):
@@ -95,7 +103,10 @@ Compositor thread, per display frame (`GXXRBridge.mm`):
 3. take the latest completed frame from the frame mailbox (a ring-slot reference is taken for this composite);
 4. if there is one: set `drawable.deviceAnchor` to that frame's anchor, encode `waitForEvent(glEvent, value)`, composite the stereo eye textures
    full screen per eye (constant reverse-Z depth at the table distance) and the world-anchored layers with the eye matrices the frame was rendered
-   with, and release the slot reference in the command buffer's completed handler;
+   with, then (package C2) the interaction feedback markers (`GXXRFeedbackRenderer`, same eye clip, same pass, no depth test — the composited
+   board/UI picture behind them carries one constant reprojection depth, not real per-pixel depth, so a marker always draws on top) and, per
+   eye, the comfort-fade veil (this drawable's own viewport, ignores the eye clip, drawn last) — see `docs/visionos-presentation.md` section 5
+   — and release the slot reference in the command buffer's completed handler;
 5. if there is none (boot, failure): the Metal loading indicator; present; commit.
 
 ## 5. Mailbox and ring protocol
@@ -131,9 +142,16 @@ waits for it (a wait for a value already reached costs nothing).
 
 `GXEngineHost.h` (Swift): `GXEngineHostConfig` (paths, `logPath`, `renderWidth/Height`, `textLanguage`, `policy`, `logicHz`, `renderFpsCap`, `forceAtlas`),
 `GXEngineHost_Start` (non-blocking), `GXEngineHost_GetStatus` (`phase`: idle / booting / running / paused / failed / stopping, `progress`, `lastError`,
-`lastLogLine`, `bootSeconds`, `engineFps`, `logicHz`, frame counters, ring slots / in use / MB, sync mode, renderer),
+`lastLogLine`, `bootSeconds`, `engineFps`, `logicHz`, frame counters, ring slots / in use / MB, sync mode, renderer, and (package C2)
+`presentationMode`/`stereoEyeWidth/Height`/`uiWidth/Height`, `graphicsApplied` (generation), `textFieldFocused`/`textFieldText`),
 `GXEngineHost_Pause(reason, paused)` (bits `GX_PAUSE_LAYER`, `GX_PAUSE_SCENE`, `GX_PAUSE_USER`), `GXEngineHost_Post(block)` (run on the engine thread before the
 next engine frame; used for UI actions that touch engine state), `GXEngineHost_LogPath`, `GXEngineHost_BeginLogging`, `GXEngineHost_ReadLogTail`, `GXEngineHost_IsActive`.
+
+Package C2 additions to `GXEngineHost.h` (full detail in `docs/visionos-presentation.md` sections 8-9): the
+`GXGraphicsSettings` API (`GXEngineHost_SetGraphics`/`GetGraphics`/`GetDefaultGraphics`, an extendable struct — render
+scale, render fps cap, shadow mode, eye size tier, UI resolution, flags — package F's Settings window is built on it)
+and the text-input bridge (`GXEngineHost_TextFieldFocused`, `GXEngineHost_SubmitText`; the Swift side is
+`visionos/App/TextInputBridge.swift`, a `.textInputBridge()` view modifier).
 
 Input: spatial events are queued by `GXXRInput` (mutex, bounded, ordered, balanced) and consumed on the **engine thread** by `VisionFrameDriver::step`
 (`XRInteraction_PollEvent`). Nothing else touches engine input state.
@@ -194,6 +212,8 @@ Windows without an unpaused match are marked "not meaningful". Quest could adopt
 | `-autoStartEngine` | start the real engine as soon as game data is ready |
 | `-fakeEngine` (alias `-angleTestScene`) | the GLES3 test scene as an engine client (no game data) |
 | `-fakeEngineBoot S`, `-fakeEngineStall S`, `-fakeEngineFps N` | fake boot time (default 3), sleep S seconds inside a frame every 10 s, frame cap (45) |
+| `-fakeEngineScript` | package C2: scripted loading -> menu -> tabletop -> ground-view sequence (repeats); implies `-fakeEngine`. See `docs/visionos-presentation.md` section 10 |
+| `-fakeEngineScriptLoading/Menu/Tabletop/Ground S` | per-phase duration overrides for `-fakeEngineScript` (default 4/4/8/6 s) |
 | `-allowNoData` | enable Enter Tabletop without game data |
 | `-autoImmersive`, `-cycleImmersive N -cycleHold S`, `-layout ...` | as in `docs/visionos-shell.md` |
 | `-engineFpsCap N`, `-engineLogicHz N` | frame policy overrides (0 = default, negative cap = uncapped) |

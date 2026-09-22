@@ -130,7 +130,9 @@ void FillScriptedFeedback(ScriptPhase phase, double phaseT, double phaseDur, GXH
     if (phase == ScriptPhase::Tabletop) {
         // A box-select rectangle over one quadrant of the board (counter-clockwise from above) and a cursor near its
         // corner, as if a box-select drag just ended there.
-        const float x0 = -hx * 0.55f, x1 = -hx * 0.10f, z0 = -hz * 0.35f, z1 = hz * 0.20f;
+        // Large enough to peek out from behind the launcher window (which floats in front of the board's center in
+        // this fake-engine test rig) so the marker is visible in a screenshot without a real headset's parallax.
+        const float x0 = -hx * 0.8f, x1 = hx * 0.8f, z0 = -hz * 0.75f, z1 = hz * 0.35f;
         const simd_float3 c0 = boardPoint(x0, z0), c1 = boardPoint(x1, z0), c2 = boardPoint(x1, z1), c3 = boardPoint(x0, z1);
         auto store = [](float dst[3], simd_float3 v) { dst[0] = v.x; dst[1] = v.y; dst[2] = v.z; };
         store(fb.boxCorners[0], c0);

@@ -59,9 +59,15 @@ void pushRing(std::vector<GXXRFlatVertex> &v, simd_float3 center, simd_float3 no
     id<MTLDevice> _device;
     id<MTLRenderPipelineState> _flatPipeline;
     id<MTLRenderPipelineState> _fadePipeline;
-    id<MTLDepthStencilState> _depthWrite;   // reverse-Z, write on: opaque markers (grab bar, panel pointer dot)
-    id<MTLDepthStencilState> _depthTestOnly; // translucent markers (box fill, rings): tested, not written
-    id<MTLDepthStencilState> _depthOff;      // comfort fade veil: always visible
+    // The board/UI picture behind these markers is a flat 2D GL render composited as a full-screen quad: the compositor
+    // writes ONE constant depth across it (docs/visionos-engine-host.md section 4: "so system reprojection sees a
+    // plane there"), not the real per-pixel depth of what it depicts. Testing a marker's true per-vertex depth against
+    // that constant would discard it whenever the marker's true distance differs from the single focus distance
+    // (which is most of the board away from dead center) -- not an occlusion decision, just an artifact of the
+    // technique. Markers are therefore drawn UNCONDITIONALLY on top (matching the documented "a marker sitting on a
+    // panel draws in front of it"), never tested and never written: there is nothing genuinely 3D drawn after them
+    // in this pass except the comfort-fade veil, which also ignores depth.
+    id<MTLDepthStencilState> _depthOff;
     std::vector<GXXRFlatVertex> _verts;
 }
 
@@ -120,12 +126,8 @@ void pushRing(std::vector<GXXRFlatVertex> &v, simd_float3 center, simd_float3 no
     if (!_fadePipeline) { NSLog(@"[GXXR] feedback: fade pipeline failed: %@", error); return nil; }
 
     MTLDepthStencilDescriptor* dd = [MTLDepthStencilDescriptor new];
-    dd.depthCompareFunction = MTLCompareFunctionGreaterEqual; // reverse-Z
-    dd.depthWriteEnabled = YES;
-    _depthWrite = [device newDepthStencilStateWithDescriptor:dd];
-    dd.depthWriteEnabled = NO;
-    _depthTestOnly = [device newDepthStencilStateWithDescriptor:dd];
     dd.depthCompareFunction = MTLCompareFunctionAlways;
+    dd.depthWriteEnabled = NO;
     _depthOff = [device newDepthStencilStateWithDescriptor:dd];
     return self;
 }
@@ -225,7 +227,7 @@ void pushRing(std::vector<GXXRFlatVertex> &v, simd_float3 center, simd_float3 no
     [enc setViewport:viewport];
     [enc setCullMode:MTLCullModeNone];
     [enc setRenderPipelineState:_flatPipeline];
-    [enc setDepthStencilState:_depthTestOnly]; // translucent geometry: never lets a marker punch through opaque content behind it, never occludes
+    [enc setDepthStencilState:_depthOff]; // always on top of the board/UI picture and the layers; see the ivar comment above
     GXXRFlatUniforms u = {};
     u.clipFromWorld = clipFromWorld;
     [enc setVertexBuffer:buf offset:0 atIndex:GXXRBufferIndexVertices];

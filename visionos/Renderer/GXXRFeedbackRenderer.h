@@ -2,9 +2,12 @@
 // GeneralsMD/Code/Main/visionos/GXEngineHostServices.h): box-select rectangle, board grab bar, cursor and panel-pointer
 // markers, placement / Ground View reticles, the hover outline, the destination waypoint, and the comfort fade veil.
 //
-// World markers (box, grab bar, cursor, reticles, hover, waypoint) are drawn depth-tested and depth-writing at their true
-// world position, in the SAME render pass as the composite layers (after them, so they sit in front of a panel they touch);
-// the comfort fade veil is a separate, depth-ignoring full-view pass drawn last.
+// World markers (box, grab bar, cursor, reticles, hover, waypoint) are projected from their true world position but drawn
+// WITHOUT a depth test, in the SAME render pass as the composite layers (after them, so they always sit in front of a
+// panel or the board picture they touch): the board/UI picture behind them is a flat 2D render composited as a full-screen
+// quad with one constant depth for reprojection (docs/visionos-engine-host.md section 4), not real per-pixel depth, so a
+// true depth test against it would discard a marker wherever its own true distance differs from that single constant --
+// not an occlusion decision. The comfort fade veil is a separate, also depth-ignoring, full-view pass drawn last.
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <simd/simd.h>

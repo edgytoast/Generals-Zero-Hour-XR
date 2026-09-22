@@ -776,7 +776,7 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
                                         clear:first];
         }
     } else if (result == XR_FRAME_SKIP && firstColor) {
-        [_renderer encodeClearInto:cb color:firstColor colorSlice:firstSlice depth:firstDepth];
+        [_renderer encodeClearInto:cb color:firstColor colorSlice:firstSlice depth:firstDepth opaqueBlack:NO];
         (*skipped)++;
     }
     const CFTimeInterval tComp1 = CACurrentMediaTime();
@@ -899,7 +899,9 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
                 }
             }
             if (!cleared && first && colorTex) {
-                [_renderer encodeClearInto:cb color:colorTex colorSlice:e.array_slice depth:depthTex];
+                // Ground View (package C2): no passthrough behind the observer (docs/visionos-presentation.md
+                // section 7) -- opaque black, not the usual alpha-0 passthrough clear.
+                [_renderer encodeClearInto:cb color:colorTex colorSlice:e.array_slice depth:depthTex opaqueBlack:out.groundView];
             }
             if (layers.count > 0) {
                 // Layers are placed in world space and drawn with the eye the frame was RENDERED with (the drawable's
@@ -967,7 +969,7 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
             const MTLViewport vp = {(double)e.viewport.x, (double)e.viewport.y, (double)e.viewport.width, (double)e.viewport.height, 0.0, 1.0};
             id<MTLTexture> colorTex = (__bridge id<MTLTexture>)e.color_target;
             id<MTLTexture> depthTex = (__bridge id<MTLTexture>)e.depth_target;
-            if (first && colorTex) [_renderer encodeClearInto:cb color:colorTex colorSlice:e.array_slice depth:depthTex];
+            if (first && colorTex) [_renderer encodeClearInto:cb color:colorTex colorSlice:e.array_slice depth:depthTex opaqueBlack:NO];
             if (layers.count > 0) {
                 simd_float4x4 clipFromWorld;
                 memcpy(&clipFromWorld, e.clip_from_world, sizeof(clipFromWorld));

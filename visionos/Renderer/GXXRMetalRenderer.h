@@ -104,10 +104,13 @@ NS_ASSUME_NONNULL_BEGIN
        clipFromWorld:(simd_float4x4)clipFromWorld;
 
 /// Encodes an empty pass that just clears the target (used when a frame is skipped but the drawable must still be presented).
+/// Alpha 0 (passthrough visible behind it) unless `opaqueBlack`: Ground View (package C2, GXHostFrameOutput.groundView)
+/// has no passthrough behind the observer — an eye viewport this frame did not draw into must not show the room.
 - (void)encodeClearInto:(id<MTLCommandBuffer>)commandBuffer
                   color:(id<MTLTexture>)color
              colorSlice:(NSUInteger)slice
-                  depth:(id<MTLTexture>)depth;
+                  depth:(id<MTLTexture>)depth
+            opaqueBlack:(BOOL)opaqueBlack;
 
 @end
 
