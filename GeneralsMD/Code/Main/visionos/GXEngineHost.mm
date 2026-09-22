@@ -286,7 +286,7 @@ void EngineThread() {
             GXHostFrameOutput output = {};
             const bool keepRunning = h.client.frame(h.client.user, &frame, &output);
             if (!keepRunning) {
-                sv.abortFrame(sv.user, &frame);
+                if (frame.slot >= 0) sv.abortFrame(sv.user, &frame);
                 HLOG("the engine stopped");
                 if (h.useRealEngine && GXEngineHostEngine_LastError()[0] != '\0') {
                     SetFailed(std::string("the engine stopped: ") + GXEngineHostEngine_LastError());
@@ -296,9 +296,11 @@ void EngineThread() {
                 }
                 break;
             }
-            sv.endFrame(sv.user, &frame, &output);
+            if (frame.slot >= 0) {
+                sv.endFrame(sv.user, &frame, &output);
+                h.produced.fetch_add(1);
+            }
             const double t1 = Now();
-            h.produced.fetch_add(1);
             ++windowFrames;
             {
                 std::lock_guard<std::mutex> lock(h.mutex);
@@ -417,6 +419,31 @@ void GXEngineHost_SetServices(const GXEngineHostServices* services) {
 }
 
 void GXEngineHost_SetProgress(const char* text) { SetProgress(text); }
+
+int GXEngineHost_PresentNested(GXHostFrame* frame, const GXHostFrameOutput* output, const GXHostFrameRequest* request) {
+    Host& h = H();
+    if (!frame || !output || !request || !h.haveServices || frame->slot < 0) return GX_NESTED_KEPT;
+    const GXEngineHostServices& sv = h.services;
+    if (sv.headAge(sv.user) > kHeadStaleSeconds) return GX_NESTED_KEPT;  // the compositor is gone: keep drawing, publish nothing
+    GXHostFrame next = {};
+    if (!sv.acquireHead(sv.user, &next)) return GX_NESTED_KEPT;
+    // The ring has one writer slot at a time: publish the current one, then take the next.
+    sv.endFrame(sv.user, frame, output);
+    h.produced.fetch_add(1);
+    {
+        std::lock_guard<std::mutex> lock(h.mutex);
+        h.lastPublishTime = Now();
+    }
+    if (!sv.beginFrame(sv.user, &next, request)) {
+        sv.abortFrame(sv.user, &next);
+        h.skipped.fetch_add(1);
+        frame->slot = -1;
+        frame->targets = nullptr;
+        return GX_NESTED_LOST;
+    }
+    *frame = next;
+    return GX_NESTED_CONTINUED;
+}
 
 void GXEngineHost_BeginLogging(const char* path) {
     if (!path || !path[0]) return;

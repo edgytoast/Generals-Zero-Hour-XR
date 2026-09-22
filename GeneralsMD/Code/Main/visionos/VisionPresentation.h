@@ -1,49 +1,79 @@
-// visionOS host: what to show and where, per engine frame (MINIMAL; the Quest presentation state machine is package C2).
+// visionOS host: what to show and where, per engine frame (package C2). Pure C++ apart from the file I/O of the layout; no engine
+// symbols and no Apple types, so the host tests and the scripted fake engine run the very same object as the real engine.
 //
-// VisionPresentation::update() is the single seam for that state machine. It runs on the engine thread before
-// VisionFrameDriver::step() and decides, from the engine's own state and the compositor's head/eye snapshot:
-//   * whether the world is captured in stereo for the tabletop (interactive skirmish/campaign) or the engine shows
-//     a conventional screen (shell, menus, movies, loading),
-//   * which ring targets and sizes this frame needs (GXHostFrameRequest),
-//   * the panel table the interaction layer picks against (VisionPanel) and the matching composite layers,
-//   * the engine's XrWorldFrame (board, extents, toggles; eyes / fov / board pose are filled by the driver).
-// What this minimal version does: stereo world when the engine reports an interactive game, plus the engine UI
-// texture on one tilted panel in front of the board; otherwise the composed game texture on one upright panel above
-// the far edge of the board. No layout persistence, no workspace arrangement, no Commands console, no Ground View
-// veil, no result card: those are C2's job and replace the body of update(), not its callers.
+// One object per engine (GXEngineHostEngine.cpp owns it), called on the engine thread in this order every frame:
+//
+//     update(in, driver, out)        before the frame: presentation state machine (Begin), workspace restore, XrWorldFrame, ring request,
+//                                    the panel table for the interaction step (built from last frame's resolved state and board)
+//     driver.step(..., out.plan.panels, out.plan.panelCount, out.world)          package E: input, gestures, board, eyes into the world frame
+//     XrGameBoot_SetWorldFrame / SetSplitEnabled / XrGameBoot_Frame              the engine frame (a loader may call loadingPresent())
+//     finish(post, driver, out.world, frameOutput)                               after the frame: resolve what was captured (P17), final
+//                                                                                layout (= the composite layers), feedback, workspace save
+//
+// The panel table of step N+1 equals the composite layers published by frame N (same function, same state, same board), which is the
+// contract of docs/visionos-interaction.md section 9 ("the pose given to visionMakePanel must be the pose of the layer").
 #pragma once
 
 #include "GXEngineHostServices.h"
+#include "GXGraphicsSettings.h"
+#include "VisionFeedback.h"
 #include "VisionFrameDriver.h"
+#include "VisionPresentationLogic.h"
+#include "VisionWorkspace.h"
 
 struct VisionPresentationInput {
 	const XRFrameInfo *frame = nullptr;
 	bool sessionRunning = true;
-	bool engineBooted = false;
-	int gameWidth = 1280, gameHeight = 720; // engine backbuffer
+	VisionPresentationFacts facts;          // read before the engine frame
 	bool atlas = false;                     // ring stereo layout (both eyes in STEREO_LEFT)
-	bool interactive = false;               // XrGameBoot_IsInteractiveGame()
-	bool canStereoWorld = false;            // XrGameBoot_CanStereoWorld()
+	GXGraphicsSettings gfx = gxGraphicsDefaults(); // the settings applied by the engine thread this frame
+	const char *layoutPath = nullptr;       // XrGameBoot_LayoutPath(): read once (preferences), written when the user edits the workspace
+	const char *legacyLayoutPath = nullptr; // XrGameBoot_LegacyLayoutPath()
 };
 
 struct VisionPresentationOutput {
-	XrWorldFrame world;                     // enabled / sizes / toggles set here; board, eyes, fov by the driver
-	VisionPanel panels[kVisionMaxPanels];
-	int panelCount = 0;
+	XrWorldFrame world;                     // enabled / sizes / toggles set here; board, coverage, observer, eyes, fov by the driver
+	VisionPanelPlan plan;                   // the panel table for the interaction step (its layers are informational: finish() publishes them)
 	bool stereoWorld = false;               // the world is captured per eye this frame
 	bool splitUI = true;                    // XrGameBoot_SetSplitEnabled
 	GXHostFrameRequest request = {};        // ring targets this frame needs
-	GXHostLayer layers[GX_HOST_MAX_LAYERS]; // planned composite layers (targets checked after the frame)
-	int layerCount = 0;
-	bool hasFocus = false;                  // world point for the constant depth of the eye composite (the table)
-	float focus[3] = {0, 0, 0};
+	VisionEyeExtent eye;
 };
 
 class VisionPresentation {
 public:
-	void update(const VisionPresentationInput &in, const VisionFrameDriver &driver, VisionPresentationOutput &out);
+	void update(const VisionPresentationInput &in, VisionFrameDriver &driver, VisionPresentationOutput &out);
+
+	// After the engine frame. Fills the presentation half of `out` (layers, feedback, mode, notice, stereoValid, focus). `world` is the
+	// frame's XrWorldFrame (observer flag). Returns the resolved mode; `requireFullWorld()` then says whether the caller must ask the
+	// engine for a complete world next frame (d3d8gles_RequireXRFullWorld).
+	VisionPresentationMode finish(const VisionPresentationFacts &post, const VisionFrameDriver &driver, const XrWorldFrame &world,
+		const VisionPresentationInput &in, GXHostFrameOutput &out);
+
+	// The synchronous loading presenter (XrGameBoot_SetLoadingPresenter): describes what the nested frame shows (the engine's loading
+	// screen on the upright panel) without touching the simulation. `post` are the facts right now.
+	void describeLoading(const VisionPresentationFacts &post, const VisionFrameDriver &driver, const VisionPresentationInput &in,
+		GXHostFrameOutput &out);
+	void loadingEnded() { visionPresentationLoadingEnd(view_); }
+
+	VisionViewState &view() { return view_; }
+	const VisionViewState &view() const { return view_; }
+	VisionWorkspace &workspace() { return workspace_; }
+	const VisionPanelPlan &plan() const { return plan_; }
+	bool consumeRequireFullWorld() { const bool r = view_.requireFullWorld; view_.requireFullWorld = false; return r; }
+	unsigned saves() const { return workspace_.saves; }
 
 private:
-	void addPanel(VisionPresentationOutput &out, VisionPanelKind kind, int target, const char *name, const XrPosef &pose,
-		float widthM, float aspect);
+	void layout(const VisionPresentationFacts &facts, const VisionFrameDriver &driver, VisionPanelPlan &plan) const;
+	void fillLayers(const VisionPanelPlan &plan, const VisionPresentationFacts &facts, GXHostFrameOutput &out) const;
+	void notice(VisionPresentationMode mode, GXHostFrameOutput &out) const;
+
+	VisionViewState view_;
+	VisionWorkspace workspace_;
+	VisionFeedbackBuilder feedback_;
+	VisionPanelPlan plan_;
+	bool layoutRead_ = false;
+	bool zoomApplied_ = false;
+	VisionMode previousInteractionMode_ = VisionMode::Idle;
+	int frameCounter_ = 0;
 };

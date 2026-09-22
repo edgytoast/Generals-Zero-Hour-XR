@@ -55,7 +55,11 @@ typedef struct GXHostFrameRequest {
 enum { GX_XRT_STEREO_LEFT = 0, GX_XRT_STEREO_RIGHT = 1, GX_XRT_GAME = 2, GX_XRT_WORLD = 3, GX_XRT_UI = 4 };
 
 /* A world-anchored textured quad the compositor draws from one ring target of the published slot. */
-enum { GX_LAYER_FLIP_Y = 1u << 0, GX_LAYER_PREMULTIPLIED = 1u << 1 };
+enum {
+    GX_LAYER_FLIP_Y = 1u << 0,
+    GX_LAYER_PREMULTIPLIED = 1u << 1,
+    GX_LAYER_HAS_UVRECT = 1u << 2   /* uvRect crops the source (GL bottom-up UVs, XrGameRect); without it the whole target is shown */
+};
 typedef struct GXHostLayer {
     char name[16];
     int32_t target;             /* D3D8GLES_XRT_GAME / WORLD / UI */
@@ -63,10 +67,59 @@ typedef struct GXHostLayer {
     float orientation[4];       /* unit quaternion x,y,z,w; local +Z is the visible face */
     float size[2];              /* width, height in metres */
     uint32_t flags;             /* GX_LAYER_* */
+    float uvRect[4];            /* x, y, w, h of the visible part of the target when GX_LAYER_HAS_UVRECT (control bar band, HUD, world crop) */
 } GXHostLayer;
 enum { GX_HOST_MAX_LAYERS = 8 };
 
+/* Screen-space and world-space feedback the compositor draws in Metal on top of the eyes and layers (package C2). Everything is world
+ * space (room space, metres); the flags say which parts are valid. Built from VisionInteractionOutput by VisionFeedback.h. */
+enum {
+    GX_FB_BOX = 1u << 0,          /* box-select rectangle on the board: boxCorners (counter-clockwise from above) */
+    GX_FB_GRAB_BAR = 1u << 1,     /* the board grab bar under the near edge */
+    GX_FB_CURSOR = 1u << 2,       /* pinch cursor on the board: cursor */
+    GX_FB_PANEL_POINTER = 1u << 3,/* pointer dot on a panel layer: pointerLayer, pointerPos */
+    GX_FB_PLACEMENT = 1u << 4,    /* building placement cue at placementPoint: legal tint, cancel cue */
+    GX_FB_GROUND_TARGET = 1u << 5,/* Ground View teleport reticle at groundTarget, hold ring */
+    GX_FB_RAY = 1u << 6,          /* eye-to-cursor ribbon */
+    GX_FB_HOVER = 1u << 7,        /* hover / focus highlight on a panel layer or the grab bar: hoverQuad */
+    GX_FB_WAYPOINT = 1u << 8      /* destination marker at waypoint (a confirmed move / placement point, fades) */
+};
+typedef struct GXHostFeedback {
+    uint32_t flags;             /* GX_FB_* */
+    float boardOrientation[4];  /* board pose orientation: flat markers lie in its XY plane, z is the board normal */
+    float boardWidth;           /* metres, for marker sizes */
+    float boxCorners[4][3];
+    int32_t boxAdditive;
+    float grabPosition[3];
+    float grabOrientation[4];   /* board orientation */
+    float grabLength, grabThickness;
+    int32_t grabActive;
+    float cursor[3];
+    int32_t cursorOnBoard;
+    int32_t pointerLayer;       /* index into GXHostFrameOutput.layers, -1 = none */
+    float pointerPos[3];
+    int32_t placementLegal;     /* -1 unknown, 0 illegal, 1 legal */
+    int32_t placementCancelArmed;
+    float placementPoint[3];
+    float groundTarget[3];
+    int32_t groundTargetValid;
+    float groundHold;           /* 0..1 hold-to-exit progress */
+    float rayStart[3], rayEnd[3];
+    float hoverQuad[4][3];
+    int32_t hoverActive;
+    float waypoint[3];
+    float waypointAge;          /* seconds since the waypoint was set; the marker fades over 1.2 s */
+    float fadeAlpha;            /* comfort fade veil 0..1 over the whole view (drawn last) */
+} GXHostFeedback;
+
 typedef struct GXHostFrameOutput {
+    /* A short text card the compositor draws near the head (title, detail) with the Metal status panel: the recovery notice and the
+     * Ground View hint. Empty title = none. */
+    char noticeTitle[64];
+    char noticeDetail[160];
+    int32_t presentationMode;   /* VisionPresentationMode as an int (diagnostics; GXEngineHostStatus.presentationMode has the name) */
+    bool groundView;            /* the eyes show the observer view: the compositor clears to opaque black behind them (no passthrough) */
+    GXHostFeedback feedback;
     bool stereoValid;           /* the stereo targets hold a picture for the eyes (composited full screen per eye) */
     bool atlas;                 /* both eyes live in the STEREO_LEFT target, left half / right half */
     bool hasFocus;              /* focus[] is valid: a world point (the table) whose distance sets the constant depth of the
@@ -144,6 +197,17 @@ typedef struct GXEngineClient {
     int selfPaced;
     int fpsCap;
 } GXEngineClient;
+
+/* Called by a client from INSIDE GXEngineClient.frame (engine thread), typically by a synchronous loader's presenter (the XrGameBoot loading
+ * presenter): publishes the slot rendered so far as a finished frame described by `output` and continues in a NEW slot acquired for
+ * `request` with the newest head snapshot, updating `frame` in place (targets, slot, info, token). The simulation is not stepped.
+ *   GX_NESTED_KEPT       nothing published (no fresh head: the compositor is gone): keep drawing into the current slot;
+ *   GX_NESTED_CONTINUED  published; `frame` now describes the new slot: pass frame->targets to d3d8gles_SetXRHostTargets again;
+ *   GX_NESTED_LOST       published, but no slot was free for the next frame (compositor starved the ring): frame->slot is -1 and
+ *                        frame->targets NULL; the client must stop drawing into ring targets (d3d8gles_SetXRHostTargets(NULL)). The host
+ *                        loop then publishes nothing for this engine frame. */
+enum { GX_NESTED_LOST = -1, GX_NESTED_KEPT = 0, GX_NESTED_CONTINUED = 1 };
+int GXEngineHost_PresentNested(GXHostFrame* frame, const GXHostFrameOutput* output, const GXHostFrameRequest* request);
 
 /* Starts the engine thread with a custom client (the fake engine). Non-blocking; same rules as GXEngineHost_Start. */
 bool GXEngineHost_StartClient(const GXEngineClient* client);
