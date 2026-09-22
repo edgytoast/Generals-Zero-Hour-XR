@@ -20,6 +20,7 @@
 #include "GXEngineHost.h"
 #include "GXEngineHostEngine.h"
 #include "GXEngineHostServices.h"
+#include "GXGraphicsSettings.h"
 
 namespace {
 
@@ -63,6 +64,12 @@ struct Host {
     bool logicInGame = false;
     double lastFrameMs = 0, longestFrameMs = 0, lastPublishTime = 0;
     std::atomic<uint64_t> produced{0}, skipped{0};
+
+    // presentation / text entry status (guarded by mutex; written by the engine thread)
+    char presentationMode[24] = {};
+    int eyeWidth = 0, eyeHeight = 0, uiWidth = 0, uiHeight = 0;
+    bool textFocused = false;
+    std::string textContent;
 };
 
 Host& H() {
@@ -274,6 +281,13 @@ void EngineThread() {
                 WaitFor(h, 0.005);
                 continue;
             }
+            GXGraphicsSettings applied = {};
+            uint32_t appliedGeneration = 0;
+            if (GXGraphicsSettings_ConsumeForEngine(&applied, &appliedGeneration)) {
+                HLOG("graphics settings applied (generation %u): render scale %.2f, fps cap %d, shadows %d, eye tier %d, ui %d, flags 0x%x", appliedGeneration,
+                     applied.renderScale, (int)applied.renderFpsCap, (int)applied.shadowMode, (int)applied.eyeTier, (int)applied.uiResolution, applied.flags);
+                if (h.useRealEngine) GXEngineHostEngine_ApplyGraphics(&applied);
+            }
             GXHostFrameRequest request = {};
             h.client.describe(h.client.user, &frame.info, &request);
             if (!sv.beginFrame(sv.user, &frame, &request)) {
@@ -286,7 +300,7 @@ void EngineThread() {
             GXHostFrameOutput output = {};
             const bool keepRunning = h.client.frame(h.client.user, &frame, &output);
             if (!keepRunning) {
-                sv.abortFrame(sv.user, &frame);
+                if (frame.slot >= 0) sv.abortFrame(sv.user, &frame);
                 HLOG("the engine stopped");
                 if (h.useRealEngine && GXEngineHostEngine_LastError()[0] != '\0') {
                     SetFailed(std::string("the engine stopped: ") + GXEngineHostEngine_LastError());
@@ -296,9 +310,11 @@ void EngineThread() {
                 }
                 break;
             }
-            sv.endFrame(sv.user, &frame, &output);
+            if (frame.slot >= 0) {
+                sv.endFrame(sv.user, &frame, &output);
+                h.produced.fetch_add(1);
+            }
             const double t1 = Now();
-            h.produced.fetch_add(1);
             ++windowFrames;
             {
                 std::lock_guard<std::mutex> lock(h.mutex);
@@ -417,6 +433,65 @@ void GXEngineHost_SetServices(const GXEngineHostServices* services) {
 }
 
 void GXEngineHost_SetProgress(const char* text) { SetProgress(text); }
+
+void GXEngineHost_SetPresentationStatus(const char* modeName, int eyeWidth, int eyeHeight, int uiWidth, int uiHeight) {
+    Host& h = H();
+    std::lock_guard<std::mutex> lock(h.mutex);
+    snprintf(h.presentationMode, sizeof(h.presentationMode), "%s", modeName ? modeName : "");
+    h.eyeWidth = eyeWidth;
+    h.eyeHeight = eyeHeight;
+    h.uiWidth = uiWidth;
+    h.uiHeight = uiHeight;
+}
+
+void GXEngineHost_SetTextFieldState(bool focused, const char* utf8Text) {
+    Host& h = H();
+    std::lock_guard<std::mutex> lock(h.mutex);
+    h.textFocused = focused;
+    if (focused) h.textContent = utf8Text ? utf8Text : "";
+    else h.textContent.clear();
+}
+
+bool GXEngineHost_TextFieldFocused(char* currentText, size_t capacity) {
+    Host& h = H();
+    std::lock_guard<std::mutex> lock(h.mutex);
+    if (currentText && capacity > 0) snprintf(currentText, capacity, "%s", h.textContent.c_str());
+    return h.textFocused;
+}
+
+bool GXEngineHost_SubmitText(const char* utf8, bool replaceExisting, bool pressEnter) {
+    Host& h = H();
+    if (!h.started.load() || !h.useRealEngine) return false;
+    NSString* text = [NSString stringWithUTF8String:utf8 ? utf8 : ""] ?: @"";
+    return GXEngineHost_Post(^{
+        GXEngineHostEngine_TextInput(text.UTF8String, replaceExisting, pressEnter);
+    });
+}
+
+int GXEngineHost_PresentNested(GXHostFrame* frame, const GXHostFrameOutput* output, const GXHostFrameRequest* request) {
+    Host& h = H();
+    if (!frame || !output || !request || !h.haveServices || frame->slot < 0) return GX_NESTED_KEPT;
+    const GXEngineHostServices& sv = h.services;
+    if (sv.headAge(sv.user) > kHeadStaleSeconds) return GX_NESTED_KEPT;  // the compositor is gone: keep drawing, publish nothing
+    GXHostFrame next = {};
+    if (!sv.acquireHead(sv.user, &next)) return GX_NESTED_KEPT;
+    // The ring has one writer slot at a time: publish the current one, then take the next.
+    sv.endFrame(sv.user, frame, output);
+    h.produced.fetch_add(1);
+    {
+        std::lock_guard<std::mutex> lock(h.mutex);
+        h.lastPublishTime = Now();
+    }
+    if (!sv.beginFrame(sv.user, &next, request)) {
+        sv.abortFrame(sv.user, &next);
+        h.skipped.fetch_add(1);
+        frame->slot = -1;
+        frame->targets = nullptr;
+        return GX_NESTED_LOST;
+    }
+    *frame = next;
+    return GX_NESTED_CONTINUED;
+}
 
 void GXEngineHost_BeginLogging(const char* path) {
     if (!path || !path[0]) return;
@@ -568,6 +643,17 @@ void GXEngineHost_GetStatus(GXEngineHostStatus* out) {
         out->ringMegabytes = ring.megabytes;
         snprintf(out->syncMode, sizeof(out->syncMode), "%s", ring.syncMode);
         snprintf(out->renderer, sizeof(out->renderer), "%s", ring.renderer);
+    }
+    out->graphicsApplied = GXGraphicsSettings_AppliedGeneration();
+    {
+        std::lock_guard<std::mutex> lock(h.mutex);
+        snprintf(out->presentationMode, sizeof(out->presentationMode), "%s", h.presentationMode);
+        out->stereoEyeWidth = h.eyeWidth;
+        out->stereoEyeHeight = h.eyeHeight;
+        out->uiWidth = h.uiWidth;
+        out->uiHeight = h.uiHeight;
+        out->textFieldFocused = h.textFocused;
+        snprintf(out->textFieldText, sizeof(out->textFieldText), "%s", h.textContent.c_str());
     }
     if (out->phase == GX_ENGINE_BOOTING || out->phase == GX_ENGINE_FAILED || out->phase == GX_ENGINE_STOPPING) {
         const std::string line = LastLine(ReadTail(4096));

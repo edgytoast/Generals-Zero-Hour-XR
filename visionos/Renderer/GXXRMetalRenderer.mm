@@ -25,6 +25,7 @@ using gxxr::Range;
     l.orientation = orientation;
     l.sizeMeters = sizeMeters;
     l.flipY = flipY;
+    l.uvRect = simd_make_float4(0, 0, 1, 1);
     l.premultipliedAlpha = YES;
     l.gammaEncoded = ![GXXRMetalRenderer isSRGBFormat:texture.pixelFormat];
     return l;
@@ -324,7 +325,7 @@ using gxxr::Range;
         GXXRCompositeParams p = {};
         p.flags = (layer.flipY ? GXXR_COMPOSITE_FLIP_Y : 0u) | (layer.premultipliedAlpha ? 0u : GXXR_COMPOSITE_PREMULTIPLY) |
                   (layer.gammaEncoded ? GXXR_COMPOSITE_SRGB_DECODE : 0u);
-        p.uvRect = simd_make_float4(0, 0, 1, 1);
+        p.uvRect = layer.uvRect;
         [enc setVertexBytes:&u length:sizeof(u) atIndex:GXXRBufferIndexUniforms];
         [enc setFragmentBytes:&p length:sizeof(p) atIndex:GXXRBufferIndexCompositeParams];
         [enc setFragmentTexture:layer.texture atIndex:0];
@@ -336,8 +337,11 @@ using gxxr::Range;
 - (void)encodeClearInto:(id<MTLCommandBuffer>)commandBuffer
                   color:(id<MTLTexture>)color
              colorSlice:(NSUInteger)slice
-                  depth:(id<MTLTexture>)depth {
-    id<MTLRenderCommandEncoder> enc = [commandBuffer renderCommandEncoderWithDescriptor:[self passWithColor:color slice:slice depth:depth clear:YES]];
+                  depth:(id<MTLTexture>)depth
+            opaqueBlack:(BOOL)opaqueBlack {
+    MTLRenderPassDescriptor* pass = [self passWithColor:color slice:slice depth:depth clear:YES];
+    if (opaqueBlack) pass.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);  // Ground View: no passthrough
+    id<MTLRenderCommandEncoder> enc = [commandBuffer renderCommandEncoderWithDescriptor:pass];
     enc.label = @"GXXR clear";
     [enc endEncoding];
 }

@@ -21,5 +21,12 @@ void GXEngineHostEngine_InstallLogSink(const char *path);
 /* Reason recorded by the last failed boot / frame (empty when the engine simply quit). */
 const char *GXEngineHostEngine_LastError(void);
 bool GXEngineHostEngine_IsInteractiveGame(void);
+/* Package C2: the graphics settings the engine thread applies from now on (called by the loop when GXGraphicsSettings_ConsumeForEngine reports a change). */
+void GXEngineHostEngine_ApplyGraphics(const GXGraphicsSettings *applied);
+/* Types text into the focused text entry (see XrGameBoot_TextInput); `replace` erases the existing content first. False when no entry is focused. */
+bool GXEngineHostEngine_TextInput(const char *utf8, bool replace, bool enter);
+/* Installed on XrGameBoot_SetLoadingPresenter (engine thread, called from INSIDE a blocked XrGameBoot_Frame): publishes one nested
+ * frame of the engine's loading screen without stepping the simulation. */
+void GXEngineHostEngine_PresentLoading();
 
 #endif

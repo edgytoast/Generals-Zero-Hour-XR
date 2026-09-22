@@ -8,6 +8,16 @@
 //   -fakeEngineStall <s>      the fake engine sleeps s seconds every 10 s (simulated map load)
 //   -fakeEngineBoot <s>       the fake engine "boots" for s seconds first (default 3)
 //   -fakeEngineFps <n>        fake engine frame cap (default 45)
+//
+// Package C2 (docs/visionos-presentation.md section 10): the scripted mode sequence, verifying the presentation state
+// machine, panel layers, cursor, box rectangle and comfort fade without game data or a headset.
+//   -fakeEngineScript             cycles loading -> menu -> tabletop -> ground-view -> tabletop -> ... (repeats; see
+//                                 GXXRFakeEngine.mm). Implies -fakeEngine.
+//   -fakeEngineScriptLoading <s>  loading phase duration (default 4; the first second is a real
+//                                 GXEngineHost_PresentNested burst demonstrating the blocking-loader path)
+//   -fakeEngineScriptMenu <s>     menu phase duration (default 4)
+//   -fakeEngineScriptTabletop <s> tabletop phase duration (default 8)
+//   -fakeEngineScriptGround <s>   ground-view phase duration (default 6; comfort fade ramps the first/last 0.5 s)
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
@@ -23,6 +33,8 @@ struct GXXRAngleOptions {
     double fakeStallSeconds = 0;
     double fakeBootSeconds = 3;
     int fakeFps = 45;
+    bool script = false;
+    double scriptLoading = 4.0, scriptMenu = 4.0, scriptTabletop = 8.0, scriptGround = 6.0;
 };
 
 inline const GXXRAngleOptions& GXXRAngleLaunchOptions() {
@@ -41,6 +53,11 @@ inline const GXXRAngleOptions& GXXRAngleLaunchOptions() {
             else if ([arg isEqualToString:@"-fakeEngineStall"]) r.fakeStallSeconds = std::max(0.0, next.doubleValue);
             else if ([arg isEqualToString:@"-fakeEngineBoot"]) r.fakeBootSeconds = std::max(0.0, next.doubleValue);
             else if ([arg isEqualToString:@"-fakeEngineFps"]) r.fakeFps = std::max(5, std::min(240, next.intValue));
+            else if ([arg isEqualToString:@"-fakeEngineScript"]) { r.script = true; r.fakeEngine = true; }
+            else if ([arg isEqualToString:@"-fakeEngineScriptLoading"]) r.scriptLoading = std::max(0.5, next.doubleValue);
+            else if ([arg isEqualToString:@"-fakeEngineScriptMenu"]) r.scriptMenu = std::max(0.5, next.doubleValue);
+            else if ([arg isEqualToString:@"-fakeEngineScriptTabletop"]) r.scriptTabletop = std::max(0.5, next.doubleValue);
+            else if ([arg isEqualToString:@"-fakeEngineScriptGround"]) r.scriptGround = std::max(0.5, next.doubleValue);
         }
         return r;
     }();

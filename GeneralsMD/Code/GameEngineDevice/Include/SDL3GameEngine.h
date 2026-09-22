@@ -76,6 +76,7 @@ class GameWindow;
 // the headless path does, but keeps all real subsystems (display, UI, mouse)
 // -- headless itself would substitute dummies and never render.
 extern bool GX_XR_OffscreenBoot;
+#include <string>
 class SDL3GameEngine : public GameEngine
 {
 public:
@@ -107,6 +108,16 @@ public:
 
 	// SDL3 specific
 	virtual SDL_Window* getSDLWindow(void) const { return m_SDLWindow; }
+
+	// GeneralsX @feature visionOS port (package C2): text entry without an SDL window and without a hardware keyboard. The
+	// visionOS host (no SDL window, GX_XR_OffscreenBoot) shows a system text field while an entry gadget owns the focus and injects
+	// what the player typed through these calls (engine thread only). The SDL path (a window exists) is untouched.
+	// True while the focused game window is a text entry gadget (chat, save-game name, lobby name ...); `text` receives its content
+	// (UTF-8) when non-null. Reads the window manager only, so it works in offscreen mode.
+	Bool xrTextEntryFocused(std::string* text) const;
+	// Types `utf8Text` into the focused entry gadget (the GWM_IME_CHAR path of forwardTextInputEvent), after `backspaces` Backspace key
+	// presses and followed by an Enter key press when `enter`. Returns false when no entry gadget has the focus.
+	Bool xrInjectText(const char* utf8Text, Int backspaces, Bool enter);
 
 protected:
 	SDL_Window*		m_SDLWindow;

@@ -38,6 +38,7 @@
 #include "GameClient/GameWindow.h"
 #include "GameClient/GameWindowManager.h"
 #include "GameClient/Gadget.h"
+#include "GameClient/GadgetTextEntry.h"
 #include "GameClient/Display.h"
 #include "WW3D2/dx8wrapper.h"
 #include "GameClient/View.h"
@@ -2541,6 +2542,73 @@ void SDL3GameEngine::updateTextInputState(void)
 		}
 	}
 #endif
+}
+
+// GeneralsX @feature visionOS port (package C2): see SDL3GameEngine.h. Offscreen text entry.
+Bool SDL3GameEngine::xrTextEntryFocused(std::string* text) const
+{
+	if (!TheWindowManager) {
+		return FALSE;
+	}
+	GameWindow* focused = TheWindowManager->winGetFocus();
+	if (focused == nullptr || !BitIsSet(focused->winGetStyle(), GWS_ENTRY_FIELD)) {
+		return FALSE;
+	}
+	if (text != nullptr) {
+		text->clear();
+		const UnicodeString content = GadgetTextEntryGetText(focused);
+		// UTF-16 (WideChar) -> UTF-8, BMP only (the engine's GWM_IME_CHAR path is BMP only as well).
+		for (Int i = 0; i < content.getLength(); ++i) {
+			const UnsignedInt c = static_cast<UnsignedInt>(content.getCharAt(i)) & 0xFFFFU;
+			if (c < 0x80U) {
+				text->push_back(static_cast<char>(c));
+			} else if (c < 0x800U) {
+				text->push_back(static_cast<char>(0xC0U | (c >> 6)));
+				text->push_back(static_cast<char>(0x80U | (c & 0x3FU)));
+			} else if (c < 0xD800U || c > 0xDFFFU) {
+				text->push_back(static_cast<char>(0xE0U | (c >> 12)));
+				text->push_back(static_cast<char>(0x80U | ((c >> 6) & 0x3FU)));
+				text->push_back(static_cast<char>(0x80U | (c & 0x3FU)));
+			}
+		}
+	}
+	return TRUE;
+}
+
+Bool SDL3GameEngine::xrInjectText(const char* utf8Text, Int backspaces, Bool enter)
+{
+	if (!TheWindowManager) {
+		return FALSE;
+	}
+	GameWindow* focused = TheWindowManager->winGetFocus();
+	if (focused == nullptr || !BitIsSet(focused->winGetStyle(), GWS_ENTRY_FIELD)) {
+		return FALSE;
+	}
+	auto* keyboard = dynamic_cast<SDL3Keyboard*>(TheKeyboard);
+	const auto pressKey = [keyboard](SDL_Scancode scancode) {
+		if (keyboard == nullptr) {
+			return;
+		}
+		for (int down = 1; down >= 0; --down) {
+			SDL_Event e = {};
+			e.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
+			e.key.timestamp = SDL_GetTicksNS();
+			e.key.scancode = scancode;
+			e.key.down = down != 0;
+			keyboard->addSDLEvent(&e);
+		}
+	};
+	for (Int i = 0; i < backspaces && i < 512; ++i) {
+		pressKey(SDL_SCANCODE_BACKSPACE);
+	}
+	if (utf8Text != nullptr && utf8Text[0] != '\0') {
+		m_TextInputFocusWindow = focused; // the tracked target of forwardTextInputEvent (kept in sync by updateTextInputState with a window)
+		forwardTextInputEvent(utf8Text);
+	}
+	if (enter) {
+		pressKey(SDL_SCANCODE_RETURN);
+	}
+	return TRUE;
 }
 
 // GeneralsX @bugfix felipebraz 01/04/2026 Forward SDL UTF-8 text input through existing GWM_IME_CHAR path.

@@ -83,6 +83,17 @@ public:
 	// initial placement (0.9 m ahead of the head) on the first frame with a tracked head.
 	void adoptBoard(const XrSurface &board) { host_.board = board; host_.boardPlaced = true; }
 	bool boardPlaced() const { return host_.boardPlaced; }
+	// A board change that comes from the host (package C2: the restored board width). Like adoptBoard, and it also tells the shell
+	// input layer where the board now is, so pinch picking follows it on the very next event.
+	void setBoard(const XrSurface &board) {
+		host_.board = board;
+		host_.boardPlaced = true;
+		float m[16], hx = 0, hz = 0;
+		visionBoardTransformForShell(board, host_.boardAspect, m, hx, hz);
+		XRInteraction_SetBoardTransform(m, hx, hz);
+	}
+	// The stored map zoom (Quest: XrLayout::worldZoom restored at start; the interaction layer clamps it to 0.5 ... 3).
+	void setWorldZoom(float zoom) { host_.worldZoom = zoom; }
 
 	// One call per rendered frame, render thread, before XrGameBoot_SetWorldFrame / XrGameBoot_Frame. `panels` is the
 	// renderer's table for THIS frame (visible textured quads: engine UI, HUD, Commands button/console).

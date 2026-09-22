@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 
+#include "GXGraphicsSettings.h"
 #include "VisionEngineBridgeXr.h"
 #include "VisionFrameDriver.h"
 #include "VisionPresentation.h"
@@ -18,22 +19,77 @@ struct D3D8GLES_XRTargets;
 extern "C" {
 void d3d8gles_SetXRHostTargets(const struct D3D8GLES_XRTargets *targets);
 void d3d8gles_InvalidateCachedState();
+void d3d8gles_RequireXRFullWorld();
 unsigned int d3d8gles_GetGameTexture();
 unsigned int d3d8gles_GetXRWorldTexture();
 unsigned int d3d8gles_GetXRUITexture();
 unsigned int d3d8gles_XRStereoTexture(int eye);
 }
 
+// The 27-function forwarding surface (docs/visionos-interaction.md section 7); declared here rather than pulling in XrGameBoot.h's
+// std::string overloads a second time for the two package C2 calls that are new in this wave.
+extern "C" {
+void GX_XR_PresentLoadingFrame();
+}
+extern bool XrGameBoot_TextFieldFocused(std::string *currentText);
+extern bool XrGameBoot_TextInput(const char *utf8, int backspaces, bool enter);
+extern void XrGameBoot_SetRenderFpsCap(int fps);
+extern void XrGameBoot_SetShadowMode(int mode);
+
 namespace {
 std::unique_ptr<VisionFrameDriver> s_driver;
 VisionPresentation s_presentation;
 VisionPresentationOutput s_plan;
+GXGraphicsSettings s_graphics = gxGraphicsDefaults();
 bool s_booted = false;
 bool s_atlas = false;
+GXHostFrame *s_currentFrame = nullptr; // the ring slot GXEngineHostEngine_Frame is currently writing (for the nested loading presenter)
 
 void copyError(char *error, size_t capacity, const std::string &text)
 {
 	if (error != nullptr && capacity > 0) snprintf(error, capacity, "%s", text.c_str());
+}
+
+VisionPresentationFacts gatherFacts()
+{
+	VisionPresentationFacts f;
+	f.booted = s_booted;
+	f.interactiveGame = XrGameBoot_IsInteractiveGame();
+	f.canStereoWorld = XrGameBoot_CanStereoWorld();
+	f.splitReady = XrGameBoot_SplitReady();
+	f.expandedUI = XrGameBoot_ExpandedUI();
+	f.canObserveGround = XrGameBoot_CanObserveGround();
+	f.gameWidth = XrGameBoot_GameWidth();
+	f.gameHeight = XrGameBoot_GameHeight();
+	f.gameTexture = XrGameBoot_GameTexture() != 0;
+	f.worldTexture = XrGameBoot_WorldTexture() != 0;
+	f.uiTexture = XrGameBoot_UITexture() != 0;
+	f.eyeTexture[0] = d3d8gles_XRStereoTexture(0) != 0;
+	f.eyeTexture[1] = s_atlas ? f.eyeTexture[0] : d3d8gles_XRStereoTexture(1) != 0;
+	f.worldRect = XrGameBoot_WorldRect();
+	f.commandRect = XrGameBoot_CommandRect();
+	return f;
+}
+
+VisionPresentationInput makeInput(const XRFrameInfo *head)
+{
+	VisionPresentationInput in;
+	in.frame = head;
+	in.facts = gatherFacts();
+	in.atlas = s_atlas;
+	in.gfx = s_graphics;
+	in.layoutPath = XrGameBoot_LayoutPath();
+	in.legacyLayoutPath = XrGameBoot_LegacyLayoutPath();
+	return in;
+}
+
+void applyGraphicsToTextures(GXHostFrameOutput *out)
+{
+	GXEngineHost_SetPresentationStatus(visionModeName(VisionPresentationMode(out->presentationMode)), s_plan.stereoWorld ? s_plan.eye.width : 0,
+		s_plan.stereoWorld ? s_plan.eye.height : 0, XrGameBoot_GameWidth(), XrGameBoot_GameHeight());
+	std::string text;
+	const bool focused = XrGameBoot_TextFieldFocused(&text);
+	GXEngineHost_SetTextFieldState(focused, focused ? text.c_str() : nullptr);
 }
 } // namespace
 
@@ -66,52 +122,92 @@ bool GXEngineHostEngine_Boot(const GXEngineHostConfig *config, const GXHostGLInf
 		return false;
 	}
 	s_driver = std::make_unique<VisionFrameDriver>(VisionCreateXrGameBootBridge());
+	XrGameBoot_SetLoadingPresenter([](void *) { GXEngineHostEngine_PresentLoading(); }, nullptr);
 	s_booted = true;
 	return true;
 }
 
 void GXEngineHostEngine_Describe(const XRFrameInfo *head, GXHostFrameRequest *request)
 {
-	VisionPresentationInput in;
-	in.frame = head;
-	in.engineBooted = s_booted;
-	in.gameWidth = XrGameBoot_GameWidth();
-	in.gameHeight = XrGameBoot_GameHeight();
-	in.atlas = s_atlas;
-	in.interactive = XrGameBoot_IsInteractiveGame();
-	in.canStereoWorld = XrGameBoot_CanStereoWorld();
+	XrGameBoot_SetRenderFpsCap(s_graphics.renderFpsCap);
+	XrGameBoot_SetShadowMode(s_graphics.shadowMode);
+	const VisionPresentationInput in = makeInput(head);
 	s_presentation.update(in, *s_driver, s_plan);
 	*request = s_plan.request;
+}
+
+void GXEngineHostEngine_ApplyGraphics(const GXGraphicsSettings *applied)
+{
+	if (applied != nullptr) s_graphics = *applied;
+}
+
+bool GXEngineHostEngine_TextInput(const char *utf8, bool replace, bool enter)
+{
+	if (!s_booted) return false;
+	int backspaces = 0;
+	if (replace) {
+		std::string current;
+		if (XrGameBoot_TextFieldFocused(&current)) {
+			// One Backspace per UTF-8 codepoint (BMP; matches forwardTextInputEvent's decode).
+			for (size_t i = 0; i < current.size();) {
+				const unsigned char c = static_cast<unsigned char>(current[i]);
+				i += (c < 0x80) ? 1 : (c < 0xE0) ? 2 : (c < 0xF0) ? 3 : 4;
+				++backspaces;
+			}
+		}
+	}
+	return XrGameBoot_TextInput(utf8, backspaces, enter);
 }
 
 bool GXEngineHostEngine_Frame(GXHostFrame *frame, GXHostFrameOutput *output)
 {
 	memset(output, 0, sizeof(*output));
+	s_currentFrame = frame; // valid until this function returns; the loading presenter (called from inside XrGameBoot_Frame) uses it
 	// Frame protocol (docs/visionos-shell.md "Engine attach guide"), engine thread, ANGLE context current:
 	d3d8gles_SetXRHostTargets(frame->targets);
 	// Interaction layer: drain the input queue, apply gestures through the engine bridge, adopt the board, fill the
 	// eye poses / fov of the world frame. The engine thread only runs frames while the layer is running.
-	s_driver->step(frame->info, true, s_plan.panels, s_plan.panelCount, s_plan.world);
+	s_driver->step(frame->info, true, s_plan.plan.panels, s_plan.plan.panelCount, s_plan.world);
 	XrGameBoot_SetWorldFrame(s_plan.world);
 	XrGameBoot_SetSplitEnabled(s_plan.splitUI);
 	XrGameBoot_PollMatchResult();
-	const bool running = XrGameBoot_Frame();
+	const bool running = XrGameBoot_Frame();  // a loading presenter may call GXEngineHostEngine_PresentLoading and publish nested frames
 	d3d8gles_InvalidateCachedState(); // the frame (and its cached GL state) is over
 	XrGameBoot_PollMatchResult();
 
-	// What the compositor may draw from this slot: only targets the engine really produced.
-	const bool stereoTextures = d3d8gles_XRStereoTexture(0) != 0 && (s_atlas || d3d8gles_XRStereoTexture(1) != 0);
-	output->stereoValid = s_plan.stereoWorld && stereoTextures;
+	const VisionPresentationFacts post = gatherFacts();
+	VisionPresentationInput in = makeInput(&frame->info);
+	s_presentation.finish(post, *s_driver, s_plan.world, in, *output);
+	if (s_presentation.consumeRequireFullWorld()) d3d8gles_RequireXRFullWorld();
 	output->atlas = s_atlas;
-	output->hasFocus = s_plan.hasFocus;
-	memcpy(output->focus, s_plan.focus, sizeof(output->focus));
-	for (int i = 0; i < s_plan.layerCount && output->layerCount < GX_HOST_MAX_LAYERS; ++i) {
-		const GXHostLayer &layer = s_plan.layers[i];
-		const unsigned texture = layer.target == GX_XRT_UI ? d3d8gles_GetXRUITexture()
-			: layer.target == GX_XRT_WORLD ? d3d8gles_GetXRWorldTexture() : d3d8gles_GetGameTexture();
-		if (texture != 0) output->layers[output->layerCount++] = layer;
-	}
+	applyGraphicsToTextures(output);
+	s_currentFrame = nullptr;
 	return running == TRUE;
+}
+
+// Installed on XrGameBoot_SetLoadingPresenter (GXEngineHostEngine_Boot): called from INSIDE the engine's frame (a synchronous
+// loader is drawing frames of its own loading screen) without stepping the simulation. Describes and publishes ONE nested
+// frame (the engine's loading screen on the upright panel) through GXEngineHost_PresentNested.
+void GXEngineHostEngine_PresentLoading()
+{
+	if (!s_driver || s_currentFrame == nullptr) return;
+	const VisionPresentationFacts post = gatherFacts();
+	VisionPresentationInput in = makeInput(&s_currentFrame->info);
+	GXHostFrameOutput out;
+	s_presentation.describeLoading(post, *s_driver, in, out);
+	applyGraphicsToTextures(&out);
+	// Upright screen (GAME target) + the UI target, no stereo: the request the next slot is configured for.
+	GXHostFrameRequest req = {};
+	req.gameWidth = XrGameBoot_GameWidth();
+	req.gameHeight = XrGameBoot_GameHeight();
+	req.targetMask = GX_TARGET_GAME | GX_TARGET_UI;
+	const int result = GXEngineHost_PresentNested(s_currentFrame, &out, &req);
+	if (result == GX_NESTED_LOST) {
+		d3d8gles_SetXRHostTargets(nullptr);
+	} else if (result == GX_NESTED_CONTINUED) {
+		d3d8gles_SetXRHostTargets(s_currentFrame->targets);
+	}
+	// GX_NESTED_KEPT (no fresh head): keep drawing into the current slot; s_currentFrame is unchanged.
 }
 
 void GXEngineHostEngine_SetPaused(bool paused)

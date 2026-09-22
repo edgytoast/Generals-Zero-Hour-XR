@@ -24,6 +24,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) simd_quatf orientation;
 @property(nonatomic) simd_float2 sizeMeters;
 @property(nonatomic) BOOL flipY;
+/// Crop of the source texture shown on the quad: x,y origin and w,h size in [0,1] (GL bottom-up UVs before flipY). Default the whole texture.
+@property(nonatomic) simd_float4 uvRect;
 /// Source alpha is premultiplied (default YES: the engine writes premultiplied coverage).
 @property(nonatomic) BOOL premultipliedAlpha;
 /// Source RGB is gamma (sRGB) encoded in a non-sRGB pixel format (default: derived from the texture's
@@ -102,10 +104,13 @@ NS_ASSUME_NONNULL_BEGIN
        clipFromWorld:(simd_float4x4)clipFromWorld;
 
 /// Encodes an empty pass that just clears the target (used when a frame is skipped but the drawable must still be presented).
+/// Alpha 0 (passthrough visible behind it) unless `opaqueBlack`: Ground View (package C2, GXHostFrameOutput.groundView)
+/// has no passthrough behind the observer — an eye viewport this frame did not draw into must not show the room.
 - (void)encodeClearInto:(id<MTLCommandBuffer>)commandBuffer
                   color:(id<MTLTexture>)color
              colorSlice:(NSUInteger)slice
-                  depth:(id<MTLTexture>)depth;
+                  depth:(id<MTLTexture>)depth
+            opaqueBlack:(BOOL)opaqueBlack;
 
 @end
 
