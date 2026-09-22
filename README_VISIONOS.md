@@ -9,7 +9,7 @@ release; this file covers the visionOS work only. This is not an Electronic Arts
 The image above is the current shell running in the visionOS simulator. The checkerboard tabletop and coloured blocks are a
 **renderer test scene**, not the game. Simulator capture, 2026-09-20.
 
-## Status: not playable yet
+## Status: a mission plays in the simulator; no device test yet
 
 Be clear about where this stands. As of 2026-09-22:
 
@@ -17,10 +17,11 @@ Be clear about where this stands. As of 2026-09-22:
 | --- | --- |
 | Native app shell (SwiftUI window, immersive space, Compositor Services, Metal) | Working in the visionOS **simulator**, ~60 fps compositor |
 | OpenGL ES 3.0 on Metal (ANGLE) for visionOS | Builds for simulator and device; smoke test and the real d3d8gles-on-ANGLE device test (90/90 checks) both pass in the simulator |
-| The Zero Hour engine on visionOS | **Boots and runs its own thread.** Built as a static library, linked into the app, verified starting against fabricated (non-retail) game-data fixtures: mounts archives, reaches INI/data loading, fails there for lack of real content — the correct failure mode with fake data. Never run against real retail data, never loaded a real map, never drawn a real battlefield frame |
+| The Zero Hour engine on visionOS | **Runs with real game data in the simulator** (the developer's own retail install, used in place, never committed). Main menu renders; campaign mission `MD_USA01` loads and shows as a stereo 3D miniature on a virtual table, with the engine HUD (radar, money, buttons) beside it. Engine about 12–15 fps in the simulator, compositor 60 fps |
 | Engine/compositor architecture | Decoupled: the engine runs on its own thread at its own pace; the compositor thread presents at display rate independent of engine load. Soak-tested 340 s in the simulator: 60 fps compositor throughout, including through simulated engine stalls |
 | Game data import and detection | Implemented and tested: a faithful C++ port of the Quest's archive validator (726 host checks), a resumable/atomic importer with crash recovery, screenshotted for every state in the simulator |
-| Interaction, presentation, UI, audio | All implemented and unit/simulator-tested against synthetic data and a scripted fake engine; **never driven by a real running match** (no game data) or **real spatial input** (no headset — the simulator cannot inject gaze/pinch/hand events) |
+| Gameplay input | **Works in the simulator with an injected gaze ray**: look+pinch selects a unit, pinch on ground moves it, pinch-drag box-selects, drag on the board rim pans, pinch on the HUD minimap orders units there. The simulator gives no gaze ray of its own, so these runs use the `-testInput` hook (below). Not yet seen: attacking an enemy, building placement, two-hand table gestures |
+| Presentation, UI, audio | Implemented and tested; the launcher now steps aside during a match so it does not block the board. Commands-window buttons were not pressed in a real match (simulator automation cannot tap SwiftUI windows) |
 | Physical Apple Vision Pro | **Never tested.** No device has run this app |
 
 The complete, evidence-backed list of every feature is in
@@ -81,11 +82,36 @@ original development machine; always pass `--udid` or set `GXX_VISIONOS_SIM_UDID
 the plain `Apple-Vision-Pro` type fails to create on some machines, use the `-4K` type) rather than sharing one — a
 Metal crash in one client can kill every client on that simulator.
 
+### Testing input in the simulator
+
+The simulator's automated pinches reach the app with no gaze ray, so they cannot aim at the board. Use the
+`-testInput` hook instead: it feeds pinch events with a gaze ray into the real input path (only the OS event source
+is replaced).
+
+```sh
+SIMCTL_CHILD_GX_START_MAP='Maps\MD_USA01\MD_USA01.map' xcrun simctl launch <udid> com.generalsx.zerohour.xr.vision -autoImmersive -autoStartEngine -testInput
+```
+
+Then write commands to `<app data container>/tmp/gx-test-input.txt` (find the container with
+`xcrun simctl get_app_container <udid> com.generalsx.zerohour.xr.vision data`). The app reads and deletes the file about
+twice a second. `nx ny` are 0–1 across a simulator screenshot (x right, y down):
+
+| Command | Effect |
+| --- | --- |
+| `tap nx ny` | look at that point and pinch |
+| `drag nx0 ny0 nx1 ny1 [steps]` | pinch-drag from one point to the other (box select; a start on the board rim pans) |
+| `mods <bits>` | modifier keys for the next events (1 = Shift, 4 = Option) |
+| `wait <seconds>` | pause between commands |
+
+Add `SIMCTL_CHILD_GX_DEBUG_INPUT=1` to log one line per pinch start and end (`[vision-input] ...`) in the engine log.
+`GX_START_MAP` skips the menu and starts that map directly; without it, use the in-game menu.
+
 The most useful launch arguments: `-autoImmersive` (open the immersive space automatically), `-fakeEngine` (run the
 built-in GLES3 test scene through the exact same engine-thread/compositor pipeline the real engine uses, no game
 data needed), `-fakeEngineScript` (a scripted loading → menu → tabletop → ground-view sequence), `-autoStartEngine`
 (boot the real engine once game data is ready), `-allowNoData` (let you enter the tabletop with the test scene even
-without game data), `-cycleImmersive N` (close/reopen the immersive space N times, for lifecycle testing). See
+without game data), `-cycleImmersive N` (close/reopen the immersive space N times, for lifecycle testing), `-keepLauncher` (keep the
+launcher window open during a match), `-testInput` (see above). See
 [docs/visionos-shell.md](docs/visionos-shell.md) and [docs/visionos-engine-host.md](docs/visionos-engine-host.md).
 
 Run `scripts/qa/vision-run-all.sh` (or add `--udid <your own simulator device>`) to reproduce this port's automated
@@ -126,31 +152,32 @@ The unsigned `device` build in step 3 of the quick start only proves that the co
 
 ## Controls
 
-Intended controls for the tabletop. The routing from gesture to engine call is implemented and unit-tested against a
-recording fake of the engine bridge (so the mapping is verified to match the Quest edition's own logic exactly), but
-**no control has been driven by a real running match or real spatial input yet** — the simulator cannot inject
-gaze/pinch/hand events, and no game data exists here to run a match against. The design and the reasoning (gaze is
+Controls for the tabletop. The routing from gesture to engine call is unit-tested against a recording fake of the
+engine bridge, and since 2026-09-22 several controls have been driven against a real running mission in the
+simulator with an injected gaze ray (`-testInput`). **Real gaze and hands on a device are not tested.** The design and the reasoning (gaze is
 never continuous on visionOS, so a ray arrives only when a pinch begins) are in
 [docs/visionos-interaction.md](docs/visionos-interaction.md), which is the authoritative reference and may change these.
 
 | Gesture | Intended action | State |
 | --- | --- | --- |
-| Look at a unit or a point on the map, then pinch | Select a unit, or give the context order (move, attack) to the selected units | routing implemented + unit-tested; never driven by real input |
-| Pinch, hold and drag across the board | Box selection | routing + rendering implemented; never driven by real input |
+| Look at a unit or a point on the map, then pinch | Select a unit, or give the context order (move, attack) to the selected units | select and move work in a real mission (simulator, injected ray); attack not yet seen |
+| Pinch, hold and drag across the board | Box selection | works in a real mission (simulator, injected ray) |
+| Pinch, hold and drag from the board rim | Pan the map | works in a real mission (simulator, injected ray) |
+| Look at the HUD (radar, buttons) and pinch | Press that part of the engine HUD | minimap works (orders the selection there); other buttons not confirmed |
 | Grab bar at the board edge, pinch and drag | Move the tabletop | math implemented + unit-tested; never driven by real input |
 | Both hands pinching, spread or twist | Scale and rotate the tabletop | math implemented + unit-tested; never driven by real input |
 | Look at the ground and pinch after choosing a building | Preview, then place; a rotate gesture and cancel are part of the design | routing implemented; placement-legality query is an open item (see the test matrix) |
 | Ground View: choose a ground spot to teleport there | Human-scale view of the battlefield; a matching exit gesture returns to the tabletop | full plumbing implemented and visually verified with synthetic data; never used with real terrain |
-| Recenter, HUD ornament (Ground View toggle, Pause, Leave Tabletop) | Place the tabletop in front of you again / quick actions | implemented, opens without crashing in the simulator |
+| Recenter, HUD ornament (Ground View toggle, Pause, Leave Tabletop, Windows → Open Launcher) | Place the tabletop in front of you again / quick actions | implemented, opens without crashing in the simulator |
 
 ## Known problems
 
-- **No real gameplay yet.** Everything up to and including the engine's INI/data-loading step now runs correctly on
-  visionOS with fabricated test data; the engine has never been run against real retail game data, so no map has
-  loaded, no battlefield has rendered, and no order has ever reached a real running match.
+- **Only part of the game has been played.** One campaign mission loads and takes orders in the simulator. Attacking,
+  building placement, skirmish setup, save/load and audio have not been checked with real data yet.
 - **Nothing has been tested on a real Apple Vision Pro.** Stereo (two eyes), comfort, thermals, frame rate, memory,
-  hand tracking, and plane/table detection are all unknown. The simulator renders a single view, has no hand
-  tracking or plane detection, and cannot inject spatial/pinch events.
+  real gaze and hand tracking, and plane/table detection are all unknown. The simulator renders a single view, has
+  no hand tracking or plane detection, and sends automated pinches without a gaze ray.
+- Loading a mission takes about 3–4 minutes in the simulator.
 - ANGLE has no multiview and no S3TC/DXT texture formats; textures are decoded on the CPU (verified correct, 48/48
   format checks) — its cost with real game textures is unmeasured. Route B (a native Metal D3D8 backend) remains
   the documented fallback if ANGLE proves too slow on device.
