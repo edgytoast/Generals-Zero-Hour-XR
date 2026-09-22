@@ -72,6 +72,7 @@ struct LauncherView: View {
         }
         .frame(minWidth: 560, minHeight: 520)
         .modifier(ImmersiveCycleDriver())
+        .textInputBridge()
         .fileImporter(isPresented: $model.filePickerPresented,
                       allowedContentTypes: [.folder],
                       allowsMultipleSelection: false) { result in
