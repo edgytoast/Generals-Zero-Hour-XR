@@ -35,6 +35,10 @@ HOST_TESTS=(
   "d3d8gles texture formats (DXT/etc)|scripts/qa/vision-gles-formats-test.sh"
   "audio listener math|scripts/qa/vision-audio-listener-test.sh"
   "Android preprocessor equivalence (XrGameBoot)|scripts/qa/vision-android-preprocess-check.sh"
+  "presentation state machine + world frame|scripts/qa/vision-presentation-test.sh"
+  "UI panel model + Quest action tables|scripts/qa/vision-ui-panel-test.sh"
+  "UI panel model: existing Quest host tests|scripts/qa/vision-ui-panel-test.sh --existing"
+  "UI localisation strings (English/German)|scripts/qa/vision-ui-strings-check.sh"
 )
 SIM_TESTS=(
   "OpenAL Soft on xrsimulator|scripts/qa/vision-audio-openal-test.sh --udid @UDID@"
