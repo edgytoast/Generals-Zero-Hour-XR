@@ -11,8 +11,15 @@
 
 #include "GXEngineHostServices.h"
 #include "GXXRD3D8GLES.h"
-#include "VisionPresentationLogic.h"  // VisionPresentationMode, visionModeName (pure header, no engine/Apple deps)
 #include "XRPresentation.h"
+
+// This file is compiled by the Xcode app target (visionos/project.yml), whose header search path does not reach
+// GeneralsMD/Code/Main (only .../visionos: see project.yml's comment on HEADER_SEARCH_PATHS), so it deliberately does
+// NOT include VisionPresentationLogic.h (which pulls in the Quest XrLayers.h/XrWorld.h/... chain through
+// VisionHostState.h/VisionEngineBridge.h). These four ordinals mirror VisionPresentationMode
+// (GeneralsMD/Code/Main/visionos/VisionPresentationLogic.h:53) exactly, for the diagnostic-only
+// GXHostFrameOutput.presentationMode int; keep them in sync if that enum's order ever changes.
+enum { kVisionModeIdle = 0, kVisionModeLoading = 1, kVisionModeMenu = 2, kVisionModeTabletop = 4, kVisionModeGroundView = 5 };
 
 #import "GXXRANGLEContext.h"
 #import "GXXRAngleOptions.h"
@@ -47,14 +54,14 @@ const char* PhaseName(ScriptPhase p) {
     return "?";
 }
 
-VisionPresentationMode VisionModeFor(ScriptPhase p) {
+int32_t VisionModeOrdinalFor(ScriptPhase p) {
     switch (p) {
-        case ScriptPhase::Loading: return VisionPresentationMode::Loading;
-        case ScriptPhase::Menu: return VisionPresentationMode::Menu;
-        case ScriptPhase::Tabletop: return VisionPresentationMode::Tabletop;
-        case ScriptPhase::GroundView: return VisionPresentationMode::GroundView;
+        case ScriptPhase::Loading: return kVisionModeLoading;
+        case ScriptPhase::Menu: return kVisionModeMenu;
+        case ScriptPhase::Tabletop: return kVisionModeTabletop;
+        case ScriptPhase::GroundView: return kVisionModeGroundView;
     }
-    return VisionPresentationMode::Idle;
+    return kVisionModeIdle;
 }
 
 // Where in the loading -> menu -> tabletop -> ground-view cycle `t` (seconds since the script started) falls.
@@ -82,8 +89,8 @@ void PresentLoadingBurst(GXHostFrame* frame, double seconds) {
         GXHostFrameOutput out;
         [gScene renderFrame:&frame->info targets:frame->targets output:&out];
         out.stereoValid = false;  // loading: the upright panel only, no stereo world
-        out.presentationMode = (int32_t)VisionPresentationMode::Loading;
-        GXEngineHost_SetPresentationStatus(visionModeName(VisionPresentationMode::Loading), 0, 0, 1280, 720);
+        out.presentationMode = kVisionModeLoading;
+        GXEngineHost_SetPresentationStatus("loading", 0, 0, 1280, 720);
         GXHostFrameRequest req = {};
         req.targetMask = GX_TARGET_GAME | GX_TARGET_UI;
         req.eyeCount = (int)frame->info.eye_count;
@@ -247,7 +254,7 @@ bool Frame(void*, GXHostFrame* frame, GXHostFrameOutput* out) {
     }
 
     [gScene renderFrame:&frame->info targets:frame->targets output:out];
-    out->presentationMode = (int32_t)VisionModeFor(phase);
+    out->presentationMode = VisionModeOrdinalFor(phase);
     if (phase == ScriptPhase::Loading || phase == ScriptPhase::Menu) {
         out->stereoValid = false;  // upright panel only: no stereo world while loading or in a menu
     }
@@ -256,7 +263,7 @@ bool Frame(void*, GXHostFrame* frame, GXHostFrameOutput* out) {
         out->stereoValid = false;  // the fake engine has no distinct ground-eye camera; show the reticle + fade only
     }
     FillScriptedFeedback(phase, phaseT, phaseDur, *out);
-    GXEngineHost_SetPresentationStatus(visionModeName(VisionModeFor(phase)), out->stereoValid ? (int)frame->info.eyes[0].viewport.width : 0,
+    GXEngineHost_SetPresentationStatus(PhaseName(phase), out->stereoValid ? (int)frame->info.eyes[0].viewport.width : 0,
                                         out->stereoValid ? (int)frame->info.eyes[0].viewport.height : 0, 1280, 720);
     return true;
 }
