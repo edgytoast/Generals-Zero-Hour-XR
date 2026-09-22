@@ -99,6 +99,13 @@ else
   SIGN_ARGS=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="")
 fi
 
+# ---- UI fonts ---------------------------------------------------------------------------------
+# The engine renders UI text with FreeType and asks for Windows faces (arial.ttf, ...). The app bundles the
+# metric-compatible Liberation fonts (SIL OFL, freely redistributable) as <bundle>/fonts, staged by the same
+# pinned, checksummed script the iOS port uses. Without them every menu label and briefing text is missing.
+export GX_FONTS="$ROOT/build/visionos-resources/fonts"
+"$ROOT/scripts/build/ios/stage-fonts.sh" >&2 || { echo "error: could not stage the UI fonts into $GX_FONTS" >&2; exit 1; }
+
 echo "==> Generating Xcode project from $SPEC" >&2
 xcodegen generate --spec "$SPEC" --project "$ROOT/visionos" --quiet >&2
 

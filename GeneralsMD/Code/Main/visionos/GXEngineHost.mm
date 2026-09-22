@@ -568,6 +568,15 @@ bool GXEngineHost_Start(const GXEngineHostConfig* config) {
         h.config.logPath = h.logPath.c_str();
     }
     [[NSFileManager defaultManager] createDirectoryAtPath:@(h.appSupportRoot.c_str()) withIntermediateDirectories:YES attributes:nil error:nil];
+    // UI fonts: the app bundles the metric-compatible Liberation fonts (SIL OFL) as <bundle>/fonts, named like the Windows
+    // faces the game asks for (arial.ttf, ...). The engine's FreeType lookup reads GENERALSX_FONTS_DIR first; the working
+    // directory is the player's game-data folder, which holds no fonts. An existing value (tests) is kept.
+    if (getenv("GENERALSX_FONTS_DIR") == nullptr) {
+        NSString* fonts = [[NSBundle mainBundle].resourcePath stringByAppendingPathComponent:@"fonts"];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:[fonts stringByAppendingPathComponent:@"arial.ttf"]]) {
+            setenv("GENERALSX_FONTS_DIR", fonts.fileSystemRepresentation, 1);
+        }
+    }
     GXEngineHostEngine_InstallLogSink(h.logPath.c_str());
     h.client = GXEngineClient{};
     h.client.name = "engine";

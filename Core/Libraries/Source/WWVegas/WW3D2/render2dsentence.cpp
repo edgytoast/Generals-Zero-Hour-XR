@@ -1979,6 +1979,7 @@ FontCharsClass::Update_Current_Buffer (int char_width)
 #if (defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE) || defined(__ANDROID__)
 
 #include <cctype>
+#include <cstdlib>
 #include <cstdio>
 #include <unistd.h>
 
@@ -2007,7 +2008,28 @@ FontCharsClass::Locate_Font_FontConfig (const char *font_name)
 	normalized[n] = '\0';
 
 	static const char *extensions[] = { ".ttf", ".otf", ".ttc" };
-	char candidate[256];
+	char candidate[1024];
+
+	// GeneralsX @bugfix visionOS port 22/09/2026 A host-provided font directory is searched first. The visionOS
+	// app bundles its fonts (the working directory there is the player's game-data folder, which holds none and
+	// must not be written to). Unset on iOS/Android, where the lookup below is unchanged.
+	if ( const char *fontsDir = getenv( "GENERALSX_FONTS_DIR" ) ) {
+		if ( fontsDir[0] != '\0' ) {
+			for ( size_t i = 0; i < sizeof(extensions) / sizeof(extensions[0]); ++i ) {
+				snprintf( candidate, sizeof(candidate), "%s/%s%s", fontsDir, normalized, extensions[i] );
+				if ( access( candidate, R_OK ) == 0 ) {
+					FreetypeFontPath = candidate;
+					return FreetypeFontPath;
+				}
+			}
+			snprintf( candidate, sizeof(candidate), "%s/arial.ttf", fontsDir );
+			if ( access( candidate, R_OK ) == 0 ) {
+				FreetypeFontPath = candidate;
+				return FreetypeFontPath;
+			}
+		}
+	}
+
 	for ( size_t i = 0; i < sizeof(extensions) / sizeof(extensions[0]); ++i ) {
 		snprintf( candidate, sizeof(candidate), "fonts/%s%s", normalized, extensions[i] );
 		if ( access( candidate, R_OK ) == 0 ) {

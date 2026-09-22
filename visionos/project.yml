@@ -44,6 +44,10 @@ targets:
       - path: Resources
         excludes:
           - Info.plist
+      # UI fonts (Liberation, SIL OFL), staged by scripts/build/visionos/build-shell.sh; copied as <bundle>/fonts.
+      - path: ../build/visionos-resources/fonts
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_NAME: GeneralsZHXR

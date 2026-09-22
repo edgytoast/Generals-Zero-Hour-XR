@@ -35,6 +35,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <cctype>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -92,6 +93,7 @@
 #include "SDL3Device/GameClient/SDL3Mouse.h"
 #include "SDL3Device/GameClient/SDL3Keyboard.h"
 #include "GameLogic/GameLogic.h"
+#include "Common/RandomValue.h"
 #include "GameLogic/FPUControl.h"
 // GeneralsX @feature Muse 16/09/2026 Read-only match-result queries.
 #include "Common/Recorder.h"
@@ -618,11 +620,42 @@ static bool xrBootTail(const XrBootTail &tail)
 	static char s_xresVal[16], s_yresVal[16];
 	snprintf(s_xresVal, sizeof(s_xresVal), "%d", tail.width);
 	snprintf(s_yresVal, sizeof(s_yresVal), "%d", tail.height);
-	static char *s_argv[] = { s_arg0, s_xresFlag, s_xresVal, s_yresFlag, s_yresVal, nullptr };
-	__argc = 5;
+	static char *s_argv[32] = { s_arg0, s_xresFlag, s_xresVal, s_yresFlag, s_yresVal, nullptr };
+	int argc = 5;
+#if defined(GX_PLATFORM_VISIONOS)
+	// GeneralsX @feature visionOS port 22/09/2026 Test hook: extra engine command-line arguments from the
+	// environment (GX_ENGINE_ARGS, whitespace separated, e.g. "-noshellmap -quickstart"). Only options available in
+	// release builds take effect ("-file" is RTS_DEBUG-only; use GX_START_MAP, below, to start a map). Set it with
+	// `SIMCTL_CHILD_GX_ENGINE_ARGS=... xcrun simctl launch ...`. A '|' inside a token stands for a space.
+	static std::string s_extraArgs;
+	static std::vector<std::string> s_extraTokens;
+	if (const char *extra = getenv("GX_ENGINE_ARGS"); extra != nullptr && extra[0] != '\0') {
+		s_extraArgs = extra;
+		s_extraTokens.clear();
+		size_t pos = 0;
+		while (pos < s_extraArgs.size()) {
+			while (pos < s_extraArgs.size() && isspace((unsigned char)s_extraArgs[pos])) ++pos;
+			size_t end = pos;
+			while (end < s_extraArgs.size() && !isspace((unsigned char)s_extraArgs[end])) ++end;
+			if (end > pos) {
+				std::string token = s_extraArgs.substr(pos, end - pos);
+				for (char &c : token) if (c == '|') c = ' ';
+				s_extraTokens.push_back(token);
+			}
+			pos = end;
+		}
+		for (std::string &token : s_extraTokens) {
+			if (argc >= 31) break;
+			s_argv[argc++] = token.data();
+			GXLOG("extra engine argument: '%s'", token.c_str());
+		}
+		s_argv[argc] = nullptr;
+	}
+#endif
+	__argc = argc;
 	__argv = s_argv;
 	CommandLine::parseCommandLineForStartup();
-	GXLOG("command line: -xres %s -yres %s", s_xresVal, s_yresVal);
+	GXLOG("command line: -xres %s -yres %s (+%d extra)", s_xresVal, s_yresVal, argc - 5);
 
 	// -- Offscreen mode on, then boot the engine --------------------------
 	GX_XR_OffscreenBoot = true;
@@ -664,6 +697,26 @@ static bool xrBootTail(const XrBootTail &tail)
 #if defined(GX_PLATFORM_VISIONOS)
 	// Engine init re-reads the FPS limit from the options (GameEngine::init); put the policy back.
 	xrFramePolicyEndOfInit();
+	// GeneralsX @feature visionOS port 22/09/2026 Test hook: GX_START_MAP="Maps\MD_USA01\MD_USA01.map" starts that
+	// map as a single-player game right after boot, exactly as the engine's own "-file" option does
+	// (GameEngine::init), which only exists in RTS_DEBUG builds. The simulator cannot inject gaze/pinch, so this is
+	// how an automated run reaches a battlefield without clicking through the menus. Unset: no effect.
+	if (const char *startMap = getenv("GX_START_MAP"); startMap != nullptr && startMap[0] != '\0' && TheMessageStream != nullptr) {
+		AsciiString map = startMap;
+		if (map.endsWithNoCase(".map")) {
+			TheWritableGlobalData->m_shellMapOn = FALSE;
+			TheWritableGlobalData->m_playIntro = FALSE;
+			TheWritableGlobalData->m_pendingFile = map;
+			GameMessage *msg = TheMessageStream->appendMessage(GameMessage::MSG_NEW_GAME);
+			msg->appendIntegerArgument(GAME_SINGLE_PLAYER);
+			msg->appendIntegerArgument(DIFFICULTY_NORMAL);
+			msg->appendIntegerArgument(0);
+			InitRandom(0);
+			GXLOG("GX_START_MAP: starting single-player map '%s'", map.str());
+		} else {
+			GXLOGE("GX_START_MAP ignored: '%s' is not a .map path", startMap);
+		}
+	}
 #endif
 	s_booted = true;
 	return true;
@@ -877,6 +930,17 @@ bool XrGameBoot_InitHost(const XrGameBootHostConfig &cfg)
 	setenv("HOME", support.c_str(), 1); // registry.ini
 	setenv("GENERALSX_USERDATA_DIR", userData.c_str(), 1);
 	setenv("CNC_GENERALS_ZH_PATH", zhRoot.c_str(), 1);
+	// GeneralsX @bugfix visionOS port 22/09/2026 UI fonts. The FreeType lookup (render2dsentence.cpp) searches
+	// GENERALSX_FONTS_DIR, then "fonts/" below the working directory (= the player's game-data folder, which holds
+	// no fonts and must not be written to). Without a font every GameFont is null: menu buttons render without
+	// labels and the first mission briefing crashed in InGameUI::postDraw (getFont()->height). The app bundles the
+	// metric-compatible Liberation fonts (SIL OFL) as <bundle>/fonts, exactly like the iOS port.
+	// (GENERALSX_FONTS_DIR is set by the app host, GXEngineHost.mm, to <bundle>/fonts before boot.)
+	if (const char *fonts = getenv("GENERALSX_FONTS_DIR")) {
+		GXLOG("fonts: %s", fonts);
+	} else {
+		GXLOGE("fonts: GENERALSX_FONTS_DIR not set; UI text will be missing");
+	}
 	if (!baseRoot.empty()) {
 		setenv("CNC_GENERALS_PATH", baseRoot.c_str(), 1);
 	}
@@ -1253,6 +1317,20 @@ void GX_XR_BeginStereoWorld() {
 		s_pickAim=oldAim;s_pickRoom=oldRoom;
 	}
 	for(int eye=0;eye<2;++eye) xrWorldEyeClip(clip[eye],s_worldFrame,eye,board);
+#if defined(GX_PLATFORM_VISIONOS)
+	// GeneralsX @feature visionOS port 22/09/2026 Stereo diagnostics next to the P7.4 mapping line: where the board
+	// center lands in eye-0 clip space. |x|,|y| <= w and -w <= z <= w (GL) means the board is in view.
+	static unsigned clipFrames=0;
+	if(!s_worldFrame.observer && (clipFrames++%180)==0) {
+		const auto &bp=s_worldFrame.board.pose;const auto &e0=s_worldFrame.eyes[0];const auto &f0=s_worldFrame.fov[0];
+		float c[4]={};const float p[4]={center.x,center.y,center.z,1};
+		for(int r=0;r<4;++r) for(int k=0;k<4;++k) c[r]+=clip[0][k*4+r]*p[k];
+		GXLOG("stereo diag: board pos=(%.3f,%.3f,%.3f) rot=(%.3f,%.3f,%.3f,%.3f) width=%.3f | eye0 pos=(%.3f,%.3f,%.3f) rot=(%.3f,%.3f,%.3f,%.3f) fov=(%.3f,%.3f,%.3f,%.3f) | eye=%dx%d | board-center clip=(%.3f,%.3f,%.3f,%.3f)",
+			bp.position.x,bp.position.y,bp.position.z,bp.orientation.x,bp.orientation.y,bp.orientation.z,bp.orientation.w,s_worldFrame.board.width,
+			e0.position.x,e0.position.y,e0.position.z,e0.orientation.x,e0.orientation.y,e0.orientation.z,e0.orientation.w,
+			f0.angleLeft,f0.angleRight,f0.angleUp,f0.angleDown,s_worldFrame.width,s_worldFrame.height,c[0],c[1],c[2],c[3]);
+	}
+#endif
 	s_renderReady=d3d8gles_BeginXRStereo(s_worldFrame.width,s_worldFrame.height,clip[0],clip[1],board,
 		s_worldFrame.observer ? -1.0f:float(h)/w,camera,s_worldFrame.atlasStereo,s_worldFrame.multiviewStereo);
 }
