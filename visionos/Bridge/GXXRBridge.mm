@@ -21,6 +21,8 @@
 
 #import <ARKit/ARKit.h>
 #import <CompositorServices/CompositorServices.h>
+#import <CoreGraphics/CoreGraphics.h>
+#import <ImageIO/ImageIO.h>
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
@@ -259,6 +261,67 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
 // Compositor loop
 // ---------------------------------------------------------------------------
 
+// ---- Debug frame dump -------------------------------------------------------------------------------------------------
+// GX_DEBUG_DUMP_FRAMES=<seconds> (e.g. 5): every <seconds> the compositor writes the published engine frame's eye and layer
+// textures as PNGs (Metal blit into a shared buffer; never glReadPixels on a wrapped texture) plus a text description of
+// the frame (stereoValid, atlas, layer names / poses / sizes, eye matrices) into <tmp>/gx-frame-dump/. For diagnosing
+// "the engine renders but nothing shows up" without a headset. Off unless the variable is set.
+static double GXXRDebugDumpInterval() {
+    static const double interval = [] {
+        const char* v = getenv("GX_DEBUG_DUMP_FRAMES");
+        return v ? atof(v) : 0.0;
+    }();
+    return interval;
+}
+
+static NSString* GXXRDebugDumpDirectory() {
+    NSString* dir = [NSTemporaryDirectory() stringByAppendingPathComponent:@"gx-frame-dump"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    return dir;
+}
+
+/// Encodes a blit of `tex` (RGBA8/BGRA8) into a shared buffer; the PNG is written when `cb` completes.
+static void GXXRDebugDumpTexture(id<MTLCommandBuffer> cb, id<MTLTexture> tex, NSString* path) {
+    if (!tex || tex.width == 0 || tex.height == 0) return;
+    if (tex.pixelFormat != MTLPixelFormatRGBA8Unorm && tex.pixelFormat != MTLPixelFormatBGRA8Unorm &&
+        tex.pixelFormat != MTLPixelFormatRGBA8Unorm_sRGB && tex.pixelFormat != MTLPixelFormatBGRA8Unorm_sRGB) {
+        fprintf(stderr, "[GXXR/dump] %s: pixel format %lu not dumped\n", path.lastPathComponent.UTF8String, (unsigned long)tex.pixelFormat);
+        return;
+    }
+    const NSUInteger w = tex.width, h = tex.height, bpr = w * 4;
+    id<MTLBuffer> buf = [tex.device newBufferWithLength:bpr * h options:MTLResourceStorageModeShared];
+    id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+    [blit copyFromTexture:tex sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(w, h, 1)
+                 toBuffer:buf destinationOffset:0 destinationBytesPerRow:bpr destinationBytesPerImage:bpr * h];
+    [blit endEncoding];
+    const bool bgra = tex.pixelFormat == MTLPixelFormatBGRA8Unorm || tex.pixelFormat == MTLPixelFormatBGRA8Unorm_sRGB;
+    [cb addCompletedHandler:^(id<MTLCommandBuffer>) {
+        const uint8_t* src = (const uint8_t*)buf.contents;
+        // Count coverage so the log answers "is anything there?" without opening the image.
+        size_t covered = 0;
+        for (size_t i = 0; i < (size_t)w * h; ++i) covered += src[i * 4 + 3] > 0;
+        CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+        const CGBitmapInfo info = bgra ? (kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst)
+                                       : (kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
+        CGContextRef ctx = CGBitmapContextCreate((void*)src, w, h, 8, bpr, cs, info);
+        CGImageRef img = ctx ? CGBitmapContextCreateImage(ctx) : nullptr;
+        if (img) {
+            CGImageDestinationRef dst = CGImageDestinationCreateWithURL((__bridge CFURLRef)[NSURL fileURLWithPath:path],
+                                                                         CFSTR("public.png"), 1, nullptr);
+            if (dst) {
+                CGImageDestinationAddImage(dst, img, nullptr);
+                CGImageDestinationFinalize(dst);
+                CFRelease(dst);
+            }
+            CGImageRelease(img);
+        }
+        if (ctx) CGContextRelease(ctx);
+        CGColorSpaceRelease(cs);
+        fprintf(stderr, "[GXXR/dump] %s %lux%lu covered=%.1f%%\n", path.lastPathComponent.UTF8String, (unsigned long)w,
+                (unsigned long)h, 100.0 * (double)covered / (double)((size_t)w * h));
+    }];
+}
+
 @interface GXXRCompositorLoop : NSObject
 - (instancetype)initWithLayerRenderer:(cp_layer_renderer_t)layer;
 - (void)start;
@@ -287,6 +350,8 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
     CFTimeInterval _hostStatusAt;
     bool _statusPanelVisible;
     uint64_t _lastCompositedSeq;
+    CFTimeInterval _lastDumpTime;  // GX_DEBUG_DUMP_FRAMES
+    int _dumpIndex;
 
     // 1 s timing window (CPU ms, summed per frame)
     double _accComposite, _accFrame;
@@ -840,6 +905,35 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
 
         [ring encodeWaitForGLSlot:pf.slot into:cb];  // GPU-GPU: composite waits for ANGLE's work on this slot
 
+        if (GXXRDebugDumpInterval() > 0 && CACurrentMediaTime() - _lastDumpTime >= GXXRDebugDumpInterval()) {
+            _lastDumpTime = CACurrentMediaTime();
+            NSString* dir = GXXRDebugDumpDirectory();
+            const int n = _dumpIndex++;
+            NSMutableString* desc = [NSMutableString stringWithFormat:@"frame seq=%llu slot=%u stereoValid=%d atlas=%d layers=%u groundView=%d eyes=%u\n",
+                                     (unsigned long long)pf.seq, (unsigned)pf.slot, (int)out.stereoValid, (int)out.atlas, (unsigned)out.layerCount,
+                                     (int)out.groundView, (unsigned)pinfo.eye_count];
+            for (uint32_t i = 0; i < out.layerCount && i < GX_HOST_MAX_LAYERS; ++i) {
+                const GXHostLayer& l = out.layers[i];
+                [desc appendFormat:@"layer %u '%s' target=%d pos=(%.3f %.3f %.3f) size=(%.3f %.3f) flags=0x%x\n", i, l.name, l.target,
+                                   l.position[0], l.position[1], l.position[2], l.size[0], l.size[1], (unsigned)l.flags];
+                GXXRDebugDumpTexture(cb, [ring textureForTarget:l.target slot:pf.slot],
+                                     [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"%03d-layer%u-%s.png", n, i, l.name]]);
+            }
+            static const char* const kTargetNames[D3D8GLES_XRT_COUNT] = {"eyeL", "eyeR", "game", "world", "ui"};
+            for (int t = 0; t < D3D8GLES_XRT_COUNT; ++t) {
+                GXXRDebugDumpTexture(cb, [ring textureForTarget:t slot:pf.slot],
+                                     [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"%03d-target-%s.png", n, kTargetNames[t]]]);
+            }
+            for (uint32_t e = 0; e < pinfo.eye_count; ++e) {
+                const float* m = pinfo.eyes[e].clip_from_world;
+                [desc appendFormat:@"eye %u clip_from_world cols: [%.3f %.3f %.3f %.3f] [%.3f %.3f %.3f %.3f] [%.3f %.3f %.3f %.3f] [%.3f %.3f %.3f %.3f]\n", e,
+                                   m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]];
+            }
+            [desc writeToFile:[dir stringByAppendingPathComponent:[NSString stringWithFormat:@"%03d-frame.txt", n]] atomically:YES
+                     encoding:NSUTF8StringEncoding error:nil];
+            fprintf(stderr, "[GXXR/dump] %s", desc.UTF8String);
+        }
+
         // World-anchored layers (UI / game / world textures of this slot).
         NSMutableArray<GXXRCompositeLayer*>* layers = [NSMutableArray arrayWithCapacity:out.layerCount];
         for (uint32_t i = 0; i < out.layerCount && i < GX_HOST_MAX_LAYERS; ++i) {
@@ -853,6 +947,9 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
                                                                sizeMeters:simd_make_float2(l.size[0], l.size[1])
                                                                     flipY:(l.flags & GX_LAYER_FLIP_Y) != 0];
             layer.premultipliedAlpha = (l.flags & GX_LAYER_PREMULTIPLIED) != 0;
+            // The engine UI is split into pieces cropped from one canvas (control bar band, HUD above it; GL bottom-up
+            // UVs). Without the crop every piece showed the whole canvas: the control bar appeared twice beside the board.
+            if (l.flags & GX_LAYER_HAS_UVRECT) layer.uvRect = simd_make_float4(l.uvRect[0], l.uvRect[1], l.uvRect[2], l.uvRect[3]);
             [layers addObject:layer];
         }
 

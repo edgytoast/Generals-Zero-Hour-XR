@@ -1002,6 +1002,26 @@ static void testPipeline() {
 		e.pres.loadingEnded();
 		CHECK(!e.pres.view().loading);
 	}
+	// ---- regression 22/09/2026: the host never calls loadingEnded(); the next regular frame must end loading by itself ----
+	// (Loading stuck after the first map load: stereo world drawn, but the layout stayed "upright screen" and the HUD layers
+	// beside the board were never published.)
+	{
+		GXHostFrameOutput nested;
+		VisionPresentationFacts loadingFacts = e.pre;
+		VisionPresentationInput in;
+		XRFrameInfo info = makeFrame(998, e.t, kHead);
+		in.frame = &info;
+		e.pres.describeLoading(loadingFacts, e.driver, in, nested);
+		CHECK(e.pres.view().loading);
+		setFacts(e, true, true, true, true, true);
+		e.frame();
+		e.frame();
+		CHECK(!e.pres.view().loading);
+		CHECK(e.out.presentationMode == int(VisionPresentationMode::Tabletop));
+		bool hasUiBar = false;
+		for (uint32_t i = 0; i < e.out.layerCount; ++i) hasUiBar = hasUiBar || std::strcmp(e.out.layers[i].name, "ui-bar") == 0;
+		CHECK(hasUiBar);
+	}
 	// ---- Ground View through the pipeline ----
 	setFacts(e, true, true, true, true, true);
 	e.bridge.canObserve = true;

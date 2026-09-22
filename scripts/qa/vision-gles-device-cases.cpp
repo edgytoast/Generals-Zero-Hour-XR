@@ -565,6 +565,16 @@ static void caseRingRotation()
 	check(matchQuad(b0, e2.clip[0], 0, 0, 256, 256, 10.f, expectCheck, 3) == 16 && matchQuad(b1, e2.clip[1], 0, 0, 256, 256, 10.f, expectCheck, 3) == 16,
 	      "slot B holds frame 2 (parallax 2.5) in both eyes");
 	check(a0b.px == a0.px && a1b.px == a1.px, "slot A is byte-identical after frame 2 (never touched by the next frame)");
+	// UI layer (MRT colour attachment 1) must follow the ring exactly like the eyes: regression 22/09/2026, the real app's HUD
+	// texture stayed empty (the control bar reached the GAME target, attachment 0, but never the UI slot the compositor reads).
+	{
+		const RGBA red = { 255, 0, 0, 255 };
+		FullTex uiB, uiA;
+		check(uiB.load(b.ui) && sameColor(uiB.gl(60, Hh - 1 - 40), red, 2),
+		      "slot B's UI texture holds frame 2's UI rectangle (MRT attachment 1 re-pointed at the rotated slot)");
+		check(r2.uiTex == b.ui.gl, "frame 2 reports slot B's UI name (%u vs %u)", r2.uiTex, b.ui.gl);
+		check(uiA.load(a.ui) && sameColor(uiA.gl(60, Hh - 1 - 40), red, 2), "slot A's UI texture still holds frame 1's UI rectangle");
+	}
 	// and back to A again
 	fillSlot(a, 0xAA);
 	FrameResult r3 = runFrame(&a, o1, tex);

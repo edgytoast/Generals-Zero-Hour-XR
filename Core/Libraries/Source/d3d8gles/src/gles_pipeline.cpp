@@ -1787,7 +1787,19 @@ void WebGLPipeline::applyFixedState(WebGLDevice *dev)
 	// COLORWRITEENABLE=0 (stencil-only) - mapping it to "write everything"
 	// made every shadow volume a visible black silhouette.
 	const DWORD cw = dev->getRenderState(D3DRS_COLORWRITEENABLE);
-	glColorMask((cw & 1) != 0, (cw & 2) != 0, (cw & 4) != 0, (cw & 8) != 0);
+	// GeneralsX @bugfix visionOS port 22/09/2026 In the XR UI phase alpha is COVERAGE for the isolated UI layer (MRT
+	// output 1), exactly like the eye targets ("alpha is coverage, independent of D3D RGB-only masks"). The terrain
+	// passes (BaseHeightMap, W3DScene) leave COLORWRITEENABLE at RGB-only to preserve backbuffer alpha, and the 2D UI never
+	// resets it (D3D never cared about backbuffer alpha), so every HUD draw kept alpha masked: the UI layer held the whole
+	// control bar in RGB with alpha 0 and the compositor treated it as fully transparent (measured with
+	// GX_DEBUG_PROBE_UI: 25 of 25 UI draws without the alpha bit). RGB keeps the engine's mask. visionOS only: the Quest
+	// host was not re-verified here (it may sample the UI layer differently); Android stays byte-identical.
+#if defined(GX_PLATFORM_VISIONOS)
+	const bool xrUICoverage = m_xrUI && m_curFBO == 0;
+#else
+	const bool xrUICoverage = false;
+#endif
+	glColorMask((cw & 1) != 0, (cw & 2) != 0, (cw & 4) != 0, xrUICoverage || (cw & 8) != 0);
 
 	// Stencil
 	if (dev->getRenderState(D3DRS_STENCILENABLE)) {
@@ -2369,6 +2381,14 @@ void WebGLPipeline::drawCommon(WebGLDevice *dev, unsigned primType, unsigned pri
 	// A host-GL stereo target that is active this frame is just as healthy as a multiview one;
 	// Android keeps the exact multiview-only condition.
 	const bool stereoHealthy=(m_xrStereoMultiview && !m_xrMultiviewFailed) || m_hostGL;
+#if defined(GX_PLATFORM_VISIONOS)
+	extern unsigned g_gxUiProbeDraws,g_gxUiProbeNoAlphaWrite,g_gxUiProbeBlend;
+	if(m_xrUI && m_curFBO==0) {
+		++g_gxUiProbeDraws;
+		if((xrColorWrite&8)==0) ++g_gxUiProbeNoAlphaWrite;
+		if(dev->getRenderState(D3DRS_ALPHABLENDENABLE)) ++g_gxUiProbeBlend;
+	}
+#endif
 	const bool omit=m_xrElision.canOmit(stereoDraw && !m_xrUI && !m_xrCaptureEnabled,m_xrStereoCoverage,
 		m_xrWorldFBO!=0 && m_xrUITex!=0,stereoHealthy);
 	if(omit)m_xrElision.omit();else {leaveXRStereoFBO();submit();}
@@ -3331,9 +3351,16 @@ bool WebGLPipeline::syncHostLayerTargets()
 			name=own;owned=true;m_lastBoundTex[0]=m_lastBoundTex[1]=~0u;
 		}
 	};
+	const GLuint uiBefore=m_xrUITex;
 	retarget(D3D8GLES_XRT_WORLD,m_xrWorldTex,m_xrWorldOwned,m_xrWorldFBO,GL_COLOR_ATTACHMENT0);
 	retarget(D3D8GLES_XRT_UI,m_xrUITex,m_xrUIOwned,m_offFBO,GL_COLOR_ATTACHMENT1);
 	glBindFramebuffer(GL_FRAMEBUFFER,m_offFBO);
+	static unsigned syncs=0;
+	if((syncs++%180)==0) {
+		const D3D8GLES_XRHostTarget &u=m_hostTargets.slot[D3D8GLES_XRT_UI];
+		fprintf(stderr,"[d3d8gles] layer sync: host UI name=%u %dx%d | attachment1 before=%u after=%u owned=%d | off=%dx%d offFBO=%u\n",
+			(unsigned)u.glTexture,u.width,u.height,(unsigned)uiBefore,(unsigned)m_xrUITex,(int)m_xrUIOwned,m_offW,m_offH,(unsigned)m_offFBO);
+	}
 	return ok;
 }
 
@@ -3657,8 +3684,45 @@ void WebGLPipeline::captureOffscreenPPM()
 
 // GeneralsX @performance Codex 14/09/2026 Publish validity per native Present,
 // including nested loading/video Presents, not per outer simulation frame.
+#if defined(GX_PLATFORM_VISIONOS)
+unsigned g_gxUiProbeDraws=0,g_gxUiProbeNoAlphaWrite=0,g_gxUiProbeBlend=0;
+#endif
 void WebGLPipeline::finishXRFrame()
 {
+#if defined(GX_PLATFORM_VISIONOS)
+	// GeneralsX @feature visionOS port 22/09/2026 Diagnostic (GX_DEBUG_PROBE_UI=1): what GL itself holds in the offscreen
+	// FBO's colour attachments 0 (GAME) and 1 (UI layer) at the end of a split frame. Blits each into a backend-owned
+	// renderbuffer and reads THAT back (never glReadPixels on a wrapped Metal texture). Every 180 split frames.
+	static const bool probe=getenv("GX_DEBUG_PROBE_UI")!=nullptr;
+	static unsigned probeFrames=0;
+	if(probe && m_xrUI && m_offFBO && (probeFrames++%180)==0) {
+		static GLuint rb=0,fbo=0;
+		if(!rb) {
+			glGenRenderbuffers(1,&rb);glBindRenderbuffer(GL_RENDERBUFFER,rb);glRenderbufferStorage(GL_RENDERBUFFER,GL_RGBA8,m_offW,m_offH);
+			glGenFramebuffers(1,&fbo);glBindFramebuffer(GL_FRAMEBUFFER,fbo);glFramebufferRenderbuffer(GL_FRAMEBUFFER,GL_COLOR_ATTACHMENT0,GL_RENDERBUFFER,rb);
+		}
+		std::vector<unsigned char> px((size_t)m_offW*m_offH*4);
+		for(int a=0;a<2;++a) {
+			glBindFramebuffer(GL_READ_FRAMEBUFFER,m_offFBO);glReadBuffer(a==0 ? GL_COLOR_ATTACHMENT0:GL_COLOR_ATTACHMENT1);
+			glBindFramebuffer(GL_DRAW_FRAMEBUFFER,fbo);
+			glBlitFramebuffer(0,0,m_offW,m_offH,0,0,m_offW,m_offH,GL_COLOR_BUFFER_BIT,GL_NEAREST);
+			glBindFramebuffer(GL_READ_FRAMEBUFFER,fbo);glReadBuffer(GL_COLOR_ATTACHMENT0);
+			glReadPixels(0,0,m_offW,m_offH,GL_RGBA,GL_UNSIGNED_BYTE,px.data());
+			size_t rgb=0,alpha=0;
+			for(size_t i=0;i<px.size();i+=4){rgb+=(px[i]|px[i+1]|px[i+2])!=0;alpha+=px[i+3]!=0;}
+			fprintf(stderr,"[d3d8gles] UI probe attachment %d (tex %u): rgb!=0 %zu, alpha!=0 %zu of %d px; glError=0x%x\n",
+				a,(unsigned)(a==0 ? m_offColorTex:m_xrUITex),rgb,alpha,m_offW*m_offH,(unsigned)glGetError());
+		}
+		fprintf(stderr,"[d3d8gles] UI probe draws this frame: %u, without alpha write (COLORWRITEENABLE & 8 == 0): %u, blended: %u\n",
+			g_gxUiProbeDraws,g_gxUiProbeNoAlphaWrite,g_gxUiProbeBlend);
+		glBindFramebuffer(GL_READ_FRAMEBUFFER,m_offFBO);glReadBuffer(GL_COLOR_ATTACHMENT0);
+		glBindFramebuffer(GL_FRAMEBUFFER,m_offFBO);
+		invalidateCachedGLState();
+	}
+#endif
+#if defined(GX_PLATFORM_VISIONOS)
+	g_gxUiProbeDraws=g_gxUiProbeNoAlphaWrite=g_gxUiProbeBlend=0;
+#endif
 	m_xrElision.publish(m_xrStereoReady,m_xrUI);
 	static unsigned frames=0,skipped=0;
 	skipped+=m_xrElision.publishedSkipped;

@@ -41,6 +41,10 @@ std::unique_ptr<VisionFrameDriver> s_driver;
 VisionPresentation s_presentation;
 VisionPresentationOutput s_plan;
 GXGraphicsSettings s_graphics = gxGraphicsDefaults();
+// Engine-side settings (fps cap, shadow mode) are pushed into XrGameBoot only when they change: once after boot, then
+// after each accepted GXEngineHost_SetGraphics. Re-applying them every frame logged two lines per frame and re-ran the
+// render-default logic inside the frame-policy guard for no reason.
+bool s_graphicsDirty = true;
 bool s_booted = false;
 bool s_atlas = false;
 GXHostFrame *s_currentFrame = nullptr; // the ring slot GXEngineHostEngine_Frame is currently writing (for the nested loading presenter)
@@ -129,8 +133,11 @@ bool GXEngineHostEngine_Boot(const GXEngineHostConfig *config, const GXHostGLInf
 
 void GXEngineHostEngine_Describe(const XRFrameInfo *head, GXHostFrameRequest *request)
 {
-	XrGameBoot_SetRenderFpsCap(s_graphics.renderFpsCap);
-	XrGameBoot_SetShadowMode(s_graphics.shadowMode);
+	if (s_graphicsDirty) {
+		s_graphicsDirty = false;
+		XrGameBoot_SetRenderFpsCap(s_graphics.renderFpsCap);
+		XrGameBoot_SetShadowMode(s_graphics.shadowMode);
+	}
 	const VisionPresentationInput in = makeInput(head);
 	s_presentation.update(in, *s_driver, s_plan);
 	*request = s_plan.request;
@@ -138,7 +145,10 @@ void GXEngineHostEngine_Describe(const XRFrameInfo *head, GXHostFrameRequest *re
 
 void GXEngineHostEngine_ApplyGraphics(const GXGraphicsSettings *applied)
 {
-	if (applied != nullptr) s_graphics = *applied;
+	if (applied != nullptr) {
+		s_graphics = *applied;
+		s_graphicsDirty = true;
+	}
 }
 
 bool GXEngineHostEngine_TextInput(const char *utf8, bool replace, bool enter)
@@ -179,6 +189,15 @@ bool GXEngineHostEngine_Frame(GXHostFrame *frame, GXHostFrameOutput *output)
 	VisionPresentationInput in = makeInput(&frame->info);
 	s_presentation.finish(post, *s_driver, s_plan.world, in, *output);
 	if (s_presentation.consumeRequireFullWorld()) d3d8gles_RequireXRFullWorld();
+	static unsigned diagFrames = 0;
+	if ((diagFrames++ % 180) == 0) {
+		// Why a layer is or is not shown (the plan asks for it; the engine must also have produced its texture).
+		fprintf(stderr, "[engine-host] presentation diag: interactive=%d canStereo=%d splitReady=%d | textures game=%d world=%d ui=%d eye=%d/%d | "
+		        "plan layers=%d panels=%d | published layers=%u stereoValid=%d | commandRect=(%.3f %.3f %.3f %.3f)\n",
+		        (int)post.interactiveGame, (int)post.canStereoWorld, (int)post.splitReady, (int)post.gameTexture, (int)post.worldTexture,
+		        (int)post.uiTexture, (int)post.eyeTexture[0], (int)post.eyeTexture[1], s_plan.plan.layerCount, s_plan.plan.panelCount,
+		        output->layerCount, (int)output->stereoValid, post.commandRect.x, post.commandRect.y, post.commandRect.w, post.commandRect.h);
+	}
 	output->atlas = s_atlas;
 	applyGraphicsToTextures(output);
 	s_currentFrame = nullptr;

@@ -115,6 +115,10 @@ VisionPresentationMode VisionPresentation::finish(const VisionPresentationFacts 
 	const VisionPresentationInput &in, GXHostFrameOutput &out)
 {
 	memset(&out, 0, sizeof(out));
+	// The regular engine frame has returned, so any synchronous loader that presented nested frames during it is over.
+	// Without this the Loading mode set by describeLoading() stuck for the rest of the session: after the first map load the
+	// tabletop was drawn in stereo but the layout stayed "upright screen", and the engine HUD beside the board never appeared.
+	visionPresentationLoadingEnd(view_);
 	const VisionPresentationMode mode = visionPresentationEnd(view_, post, world.observer);
 	out.presentationMode = int(mode);
 	out.groundView = mode == VisionPresentationMode::GroundView;

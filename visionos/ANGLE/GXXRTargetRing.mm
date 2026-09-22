@@ -209,6 +209,13 @@ static NSUInteger BytesPerPixel(MTLPixelFormat) { return 4; }
     _curW[t] = w;
     _curH[t] = h;
     _bytes += (uint64_t)w * (uint64_t)h * BytesPerPixel(_format) * _slotCount;
+    {
+        char names[128] = {};
+        size_t used = 0;
+        for (NSUInteger s = 0; s < _slotCount && used < sizeof(names); ++s)
+            used += (size_t)snprintf(names + used, sizeof(names) - used, "%s%u", s ? "," : "", _gl[s][t]);
+        GXXR_LOG("target %s GL names per slot: %s", kTargetNames[t], names);
+    }
     GXXR_LOG("target %s: %dx%d x%lu slots (%.1f MB)", kTargetNames[t], w, h, (unsigned long)_slotCount,
              (double)w * h * BytesPerPixel(_format) * _slotCount / (1024.0 * 1024.0));
     return YES;
@@ -226,12 +233,17 @@ static NSUInteger BytesPerPixel(MTLPixelFormat) { return 4; }
         [self setSizeWidth:0 height:0 forTarget:D3D8GLES_XRT_STEREO_RIGHT];
         return;
     }
+    // The engine always renders BOTH eyes (d3d8gles_BeginXRStereo takes two clips), whatever the display has, so both
+    // eye targets exist even when the drawable reports one view (the visionOS simulator). d3d8gles only uses host
+    // targets when both are supplied; with the right eye missing it silently fell back to its own private textures and
+    // the texture the compositor samples stayed empty (found 22/09/2026: the tabletop was invisible in the simulator).
+    (void)eyeCount;
     if (_atlas) {
-        [self setSizeWidth:width * (eyeCount > 1 ? 2 : 1) height:height forTarget:D3D8GLES_XRT_STEREO_LEFT];
+        [self setSizeWidth:width * 2 height:height forTarget:D3D8GLES_XRT_STEREO_LEFT];
         [self setSizeWidth:0 height:0 forTarget:D3D8GLES_XRT_STEREO_RIGHT];
     } else {
         [self setSizeWidth:width height:height forTarget:D3D8GLES_XRT_STEREO_LEFT];
-        [self setSizeWidth:eyeCount > 1 ? width : 0 height:eyeCount > 1 ? height : 0 forTarget:D3D8GLES_XRT_STEREO_RIGHT];
+        [self setSizeWidth:width height:height forTarget:D3D8GLES_XRT_STEREO_RIGHT];
     }
 }
 
