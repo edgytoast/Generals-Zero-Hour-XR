@@ -33,6 +33,7 @@
 #include <cstring>
 #include <mutex>
 #include <set>
+#include <vector>
 
 #include "PlatformFilesystem.h"
 #include "PlatformLifecycle.h"
@@ -857,12 +858,12 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
 
         // World pose of every published layer, indexed exactly like out.layers (GXHostFeedback.pointerLayer indexes into
         // out.layers, not the filtered `layers` array above, which can skip an entry whose texture was not found this frame).
-        NSMutableArray<NSValue*>* layerPoses = [NSMutableArray arrayWithCapacity:out.layerCount];
+        std::vector<simd_float4x4> layerPoses(out.layerCount);
         for (uint32_t i = 0; i < out.layerCount && i < GX_HOST_MAX_LAYERS; ++i) {
             const GXHostLayer& l = out.layers[i];
             simd_float4x4 m = simd_matrix4x4(simd_quaternion(l.orientation[0], l.orientation[1], l.orientation[2], l.orientation[3]));
             m.columns[3] = simd_make_float4(l.position[0], l.position[1], l.position[2], 1.0f);
-            [layerPoses addObject:[NSValue value:&m withObjCType:@encode(simd_float4x4)]];
+            layerPoses[i] = m;
         }
 
         float wfb[16];
@@ -914,7 +915,8 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
                 simd_float4x4 clipFromWorld;
                 memcpy(&clipFromWorld, pe.clip_from_world, sizeof(clipFromWorld));
                 [_feedbackRenderer encodeMarkersInto:cb color:colorTex colorSlice:e.array_slice depth:depthTex viewport:vp
-                                        clipFromWorld:clipFromWorld feedback:&out.feedback layerPoses:layerPoses];
+                                        clipFromWorld:clipFromWorld feedback:&out.feedback
+                                   layerWorldFromQuad:layerPoses.data() layerCount:layerPoses.size()];
                 drewAnything = true;
             }
             if (_feedbackRenderer && out.feedback.fadeAlpha > 0.001f) {

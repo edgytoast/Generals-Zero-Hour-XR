@@ -152,7 +152,8 @@ void pushRing(std::vector<GXXRFlatVertex> &v, simd_float3 center, simd_float3 no
                  viewport:(MTLViewport)viewport
             clipFromWorld:(simd_float4x4)clipFromWorld
                  feedback:(const GXHostFeedback*)fb
-               layerPoses:(NSArray<NSValue*>*)layerWorldFromQuad {
+       layerWorldFromQuad:(const simd_float4x4*)layerWorldFromQuad
+               layerCount:(NSUInteger)layerCount {
     if (fb == nullptr || fb->flags == 0) return;
     _verts.clear();
     std::vector<GXXRFlatVertex> translucent; // box fill / rings: depth-tested, not written (never occludes a later opaque marker)
@@ -179,9 +180,8 @@ void pushRing(std::vector<GXXRFlatVertex> &v, simd_float3 center, simd_float3 no
     if (fb->flags & GX_FB_CURSOR) {
         pushDisk(_verts, V(fb->cursor) + boardNormal * 0.001f, boardNormal, markerRadius, simd_make_float4(1.0f, 0.95f, 0.35f, 0.85f));
     }
-    if (fb->flags & GX_FB_PANEL_POINTER && fb->pointerLayer >= 0 && (NSUInteger)fb->pointerLayer < layerWorldFromQuad.count) {
-        simd_float4x4 pose;
-        [layerWorldFromQuad[(NSUInteger)fb->pointerLayer] getValue:&pose];
+    if (fb->flags & GX_FB_PANEL_POINTER && layerWorldFromQuad != nullptr && fb->pointerLayer >= 0 && (NSUInteger)fb->pointerLayer < layerCount) {
+        const simd_float4x4& pose = layerWorldFromQuad[(NSUInteger)fb->pointerLayer];
         const simd_float3 normal = simd_normalize(simd_make_float3(pose.columns[2].x, pose.columns[2].y, pose.columns[2].z));
         pushDisk(_verts, V(fb->pointerPos) + normal * 0.002f, normal, markerRadius * 0.7f, simd_make_float4(1.0f, 1.0f, 1.0f, 0.9f), 14);
     }

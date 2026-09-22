@@ -19,10 +19,10 @@ NS_ASSUME_NONNULL_BEGIN
                              colorFormat:(MTLPixelFormat)colorFormat
                              depthFormat:(MTLPixelFormat)depthFormat;
 
-/// Draws the world-space markers of `feedback` into `color`/`depth` with the eye's `clipFromWorld`. `layerPose` maps a
-/// GXHostFeedback.pointerLayer index (into the frame's published layers) to that layer's world pose, for the panel-pointer
-/// marker: pass a block that looks the pose up, or nil results in the marker being skipped. Loads the existing color/depth
-/// (encode after the eye composite and the layers).
+/// Draws the world-space markers of `feedback` into `color`/`depth` with the eye's `clipFromWorld`. `layerWorldFromQuad`/
+/// `layerCount` index exactly like GXHostFrameOutput.layers (GXHostFeedback.pointerLayer is an index into that same
+/// array): the world pose of each published layer, for the panel-pointer marker (an index outside the array, or a nil
+/// array, just skips that marker). Loads the existing color/depth (encode after the eye composite and the layers).
 - (void)encodeMarkersInto:(id<MTLCommandBuffer>)commandBuffer
                     color:(id<MTLTexture>)color
                colorSlice:(NSUInteger)slice
@@ -30,7 +30,8 @@ NS_ASSUME_NONNULL_BEGIN
                  viewport:(MTLViewport)viewport
             clipFromWorld:(simd_float4x4)clipFromWorld
                  feedback:(const GXHostFeedback*)feedback
-               layerPoses:(NSArray<NSValue*>*)layerWorldFromQuad;
+       layerWorldFromQuad:(nullable const simd_float4x4*)layerWorldFromQuad
+               layerCount:(NSUInteger)layerCount;
 
 /// Draws the full-view comfort fade veil (black at `alpha`) over the whole viewport, on top of everything. No depth test.
 - (void)encodeFadeInto:(id<MTLCommandBuffer>)commandBuffer
