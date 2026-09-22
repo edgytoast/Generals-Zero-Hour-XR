@@ -59,8 +59,8 @@ enum GraphicsBackend {
         g.eyeTier = s.eyeTier.rawValue
         g.uiResolution = s.uiResolution.rawValue
         var flags: UInt32 = 0
-        if s.comfortFade { flags |= UInt32(GX_GFX_COMFORT_FADE.rawValue) }
-        if s.focusMarker { flags |= UInt32(GX_GFX_FOCUS_MARKER.rawValue) }
+        if s.comfortFade { flags |= UInt32(GX_GFX_COMFORT_FADE) }
+        if s.focusMarker { flags |= UInt32(GX_GFX_FOCUS_MARKER) }
         g.flags = flags
         let accepted = GXEngineHost_SetGraphics(&g)
         gfxLog.info("graphics: scale \(s.renderScale, privacy: .public) cap \(s.renderFpsCap, privacy: .public) shadows \(s.shadowMode.rawValue, privacy: .public) tier \(s.eyeTier.rawValue, privacy: .public) ui \(s.uiResolution.rawValue, privacy: .public) flags \(flags, privacy: .public) accepted \(accepted, privacy: .public)")
@@ -79,8 +79,8 @@ enum GraphicsBackend {
         s.shadowMode = GraphicsSettings.ShadowMode(rawValue: g.shadowMode) ?? .decals
         s.eyeTier = GraphicsSettings.EyeTier(rawValue: g.eyeTier) ?? .balanced
         s.uiResolution = GraphicsSettings.UIResolution(rawValue: g.uiResolution) ?? .p720
-        s.comfortFade = (g.flags & UInt32(GX_GFX_COMFORT_FADE.rawValue)) != 0
-        s.focusMarker = (g.flags & UInt32(GX_GFX_FOCUS_MARKER.rawValue)) != 0
+        s.comfortFade = (g.flags & UInt32(GX_GFX_COMFORT_FADE)) != 0
+        s.focusMarker = (g.flags & UInt32(GX_GFX_FOCUS_MARKER)) != 0
         return s
     }
 }

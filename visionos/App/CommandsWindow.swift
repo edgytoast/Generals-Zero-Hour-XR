@@ -4,11 +4,17 @@ import SwiftUI
 /// waypoints, formations, tactics and map views A to D, plus a context card. Controls, labels, states and counts come from the
 /// C++ panel model (GXPanelModel_Build over xrCommandLayout); presses go through GXPanelAction_Perform, i.e. the ported
 /// applyCommandAction on the engine thread. See docs/visionos-ui.md.
+/// `appModel`/`store` are init parameters, not `@Environment`, even though the window's environment also carries them
+/// (`GeneralsZHXRApp.swift`'s `WindowGroup` sets both, for the descendants below that still read `@Environment(PanelStore.self)`
+/// normally, e.g. `CommandsHelpView`, `PanelControlView`). `CommandsWindow` itself attaches two ornaments in its own body
+/// (`commandsHoverOrnament`, `hudOrnament`), and a top-level view that both attaches an ornament and reads
+/// `@Environment(SomeObservableType.self)` on itself was observed to crash on this SDK: see the comment on
+/// `HudOrnament` (visionos/App/HudOrnament.swift) and `UIWindowsCoordinator` (visionos/UI/UIWindowsCoordinator.swift).
 struct CommandsWindow: View {
     static let id = "commands"
 
-    @Environment(AppModel.self) private var appModel
-    @Environment(PanelStore.self) private var store
+    let appModel: AppModel
+    let store: PanelStore
     private let page = Int(GX_PANEL_COMMANDS)
 
     var body: some View {

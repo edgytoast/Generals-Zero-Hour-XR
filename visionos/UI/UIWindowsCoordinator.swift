@@ -3,9 +3,17 @@ import SwiftUI
 /// Attached to the launcher window: opens the Commands window together with the immersive space (and closes it with it), opens
 /// the windows named by `-openWindow`, routes host-side panel effects and adds the toolbar ornament. Kept out of LauncherView.swift
 /// so the launcher stays untouched.
+///
+/// `model`/`store` are passed in by the caller (`GeneralsZHXRApp.swift`, which already has them from `@State`), not read
+/// through `@Environment` here: a `ViewModifier` whose `body(content:)` installs an ornament (`.hudOrnament` below) was
+/// observed to crash on this SDK the moment ANY of its own `@Environment(SomeObservableType.self)` properties are read —
+/// not only reads textually inside the ornament's content closure — with the same `TransformOrnament.updateValue()` ->
+/// "No Observable object of type ... found" fatal error documented on `HudOrnament` (visionos/App/HudOrnament.swift).
+/// Reproduced here with `AppModel` before this fix (xrOS 27.0 simulator). System `EnvironmentValues` keys
+/// (`\.openWindow`, `\.dismissWindow`) are unaffected and stay as `@Environment`.
 struct UIWindowsCoordinator: ViewModifier {
-    @Environment(AppModel.self) private var model
-    @Environment(PanelStore.self) private var store
+    let model: AppModel
+    let store: PanelStore
     @Environment(\.openWindow) private var openWindow
     @Environment(\.dismissWindow) private var dismissWindow
     @State private var started = false

@@ -6,7 +6,7 @@ import SwiftUI
 /// where the player looks only when a pinch begins, so between pinches this shows the last target, not what is looked at now.
 /// The card says so.
 struct HoverInfoCard: View {
-    @Environment(PanelStore.self) private var store
+    let store: PanelStore
 
     var body: some View {
         let world = cString(store.snapshot.worldHover)
@@ -32,13 +32,17 @@ struct HoverInfoCard: View {
 }
 
 extension View {
-    /// The hover / target ornament above the Commands window, visible only while the engine has text for it.
+    /// The hover / target ornament above the Commands window, visible only while the engine has text for it. `store` is
+    /// passed straight into `HoverInfoCard` as a stored property, not re-read from `@Environment` inside the ornament
+    /// content closure: see the type comment on `HudOrnament` (visionos/App/HudOrnament.swift) for why a custom
+    /// `@Environment`/`.environment(_:)` round trip through an ornament's content closure crashes on this SDK
+    /// (xrOS 27.0 simulator: `TransformOrnament.updateValue()` -> `EnvironmentValues.subscript.getter` -> fatal
+    /// "No Observable object of type ... found", reproduced here too before this fix).
     func commandsHoverOrnament(store: PanelStore) -> some View {
         let has = store.snapshot.worldHover.0 != 0 || store.snapshot.panelHover.0 != 0
         return self.ornament(visibility: has ? .visible : .hidden, attachmentAnchor: .scene(.top), contentAlignment: .bottom) {
-            HoverInfoCard()
+            HoverInfoCard(store: store)
                 .glassBackgroundEffect()
-                .environment(store)
         }
     }
 }

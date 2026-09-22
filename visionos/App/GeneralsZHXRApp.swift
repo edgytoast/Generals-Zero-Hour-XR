@@ -14,7 +14,7 @@ struct GeneralsZHXRApp: App {
             LauncherView()
                 .environment(model)
                 .environment(panelStore)
-                .modifier(UIWindowsCoordinator())
+                .modifier(UIWindowsCoordinator(model: model, store: panelStore))
         }
         .defaultSize(width: 760, height: 1000)
 
@@ -23,7 +23,7 @@ struct GeneralsZHXRApp: App {
         // below(WindowProxy)`, found through `context.windows`); the system picks the depth and height, and an app cannot give a
         // window an absolute position in a Full Space. When the reference window is closed the system default placement applies.
         WindowGroup(id: CommandsWindow.id) {
-            CommandsWindow()
+            CommandsWindow(appModel: model, store: panelStore)
                 .environment(model)
                 .environment(panelStore)
         }
