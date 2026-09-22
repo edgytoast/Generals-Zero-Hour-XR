@@ -11,16 +11,21 @@ The image above is the current shell running in the visionOS simulator. The chec
 
 ## Status: not playable yet
 
-Be clear about where this stands. As of 2026-09-20:
+Be clear about where this stands. As of 2026-09-22:
 
 | Area | State |
 | --- | --- |
-| Native app shell (SwiftUI window, immersive space, Compositor Services, Metal) | Working in the visionOS **simulator** with a test scene at about 60 fps |
-| OpenGL ES 3.0 on Metal (ANGLE) for visionOS | Builds for simulator and device; smoke test passes in the simulator |
-| The game engine on visionOS | **Not running.** It compiles and links in a probe build; it has never started, loaded a map or drawn a frame |
-| Game data import and detection | Not implemented (a placeholder folder check only) |
-| Gameplay, input, audio, performance | Not implemented or not tested |
+| Native app shell (SwiftUI window, immersive space, Compositor Services, Metal) | Working in the visionOS **simulator**, ~60 fps compositor |
+| OpenGL ES 3.0 on Metal (ANGLE) for visionOS | Builds for simulator and device; smoke test and the real d3d8gles-on-ANGLE device test (90/90 checks) both pass in the simulator |
+| The Zero Hour engine on visionOS | **Boots and runs its own thread.** Built as a static library, linked into the app, verified starting against fabricated (non-retail) game-data fixtures: mounts archives, reaches INI/data loading, fails there for lack of real content — the correct failure mode with fake data. Never run against real retail data, never loaded a real map, never drawn a real battlefield frame |
+| Engine/compositor architecture | Decoupled: the engine runs on its own thread at its own pace; the compositor thread presents at display rate independent of engine load. Soak-tested 340 s in the simulator: 60 fps compositor throughout, including through simulated engine stalls |
+| Game data import and detection | Implemented and tested: a faithful C++ port of the Quest's archive validator (726 host checks), a resumable/atomic importer with crash recovery, screenshotted for every state in the simulator |
+| Interaction, presentation, UI, audio | All implemented and unit/simulator-tested against synthetic data and a scripted fake engine; **never driven by a real running match** (no game data) or **real spatial input** (no headset — the simulator cannot inject gaze/pinch/hand events) |
 | Physical Apple Vision Pro | **Never tested.** No device has run this app |
+
+The complete, evidence-backed list of every feature is in
+[docs/VISIONOS_TEST_MATRIX.md](docs/VISIONOS_TEST_MATRIX.md) — read it before believing any summary here, including
+this one.
 
 The complete, evidence-backed list of every feature and its status is in
 [docs/VISIONOS_TEST_MATRIX.md](docs/VISIONOS_TEST_MATRIX.md). The design, decisions and risks are in
@@ -61,17 +66,30 @@ scripts/build/visionos/build-shell.sh simulator --derived-data build/visionos-dd
 scripts/build/visionos/build-shell.sh device --derived-data build/visionos-dd-device
 
 # 4. Run the shell in the simulator and capture screenshots. Use your own simulator device.
-xcrun simctl create "GXR-mine" com.apple.CoreSimulator.SimDeviceType.Apple-Vision-Pro com.apple.CoreSimulator.SimRuntime.xrOS-26-5
+xcrun simctl create "GXR-mine" com.apple.CoreSimulator.SimDeviceType.Apple-Vision-Pro-4K com.apple.CoreSimulator.SimRuntime.xrOS-26-5
 scripts/build/visionos/run-shell-simulator.sh --derived-data build/visionos-dd --out-dir build/visionos-shots \
     --udid <the-udid-printed-by-simctl-create> --wait 20 --shots 2
 ```
 
-Building the C++ engine as the static library `z_generals` (option `SAGE_BUILD_VISIONOS_LIB`) and linking it into the app
-is described in [docs/BUILD/VISIONOS.md](docs/BUILD/VISIONOS.md). The run script defaults to a simulator UUID that belongs
-to the original development machine; always pass `--udid` or set `GXX_VISIONOS_SIM_UDID`.
+`build-shell.sh` builds the engine as a static library (target `z_generals`, option `SAGE_BUILD_VISIONOS_LIB`) and links
+it into the app automatically when the merged `GeneralsZHEngine.xcframework` is missing; run
+`scripts/build/visionos/build-engine.sh --simulator --device && scripts/build/visionos/make-xcframework.sh --simulator --device`
+yourself first if you want to control that step, or pass `--no-build-engine` to `build-shell.sh` to skip it. Full detail
+in [docs/BUILD/VISIONOS.md](docs/BUILD/VISIONOS.md). The run script defaults to a simulator UUID that belongs to the
+original development machine; always pass `--udid` or set `GXX_VISIONOS_SIM_UDID` — **create your own simulator device**
+(`xcrun simctl create GXR-mine com.apple.CoreSimulator.SimDeviceType.Apple-Vision-Pro-4K com.apple.CoreSimulator.SimRuntime.xrOS-26-5`;
+the plain `Apple-Vision-Pro` type fails to create on some machines, use the `-4K` type) rather than sharing one — a
+Metal crash in one client can kill every client on that simulator.
 
-Launch arguments accepted by the shell: `-autoImmersive`, `-externalEyeTextures` (exercises the engine hand-off path),
-`-layout layered|shared|dedicated`. See [docs/visionos-shell.md](docs/visionos-shell.md).
+The most useful launch arguments: `-autoImmersive` (open the immersive space automatically), `-fakeEngine` (run the
+built-in GLES3 test scene through the exact same engine-thread/compositor pipeline the real engine uses, no game
+data needed), `-fakeEngineScript` (a scripted loading → menu → tabletop → ground-view sequence), `-autoStartEngine`
+(boot the real engine once game data is ready), `-allowNoData` (let you enter the tabletop with the test scene even
+without game data), `-cycleImmersive N` (close/reopen the immersive space N times, for lifecycle testing). See
+[docs/visionos-shell.md](docs/visionos-shell.md) and [docs/visionos-engine-host.md](docs/visionos-engine-host.md).
+
+Run `scripts/qa/vision-run-all.sh` (or add `--udid <your own simulator device>`) to reproduce this port's automated
+test evidence in one command; see [docs/VISIONOS_TEST_MATRIX.md](docs/VISIONOS_TEST_MATRIX.md) for what each test proves.
 
 ## Game data
 
@@ -82,9 +100,10 @@ or other copyrighted assets.
 - Which files are needed, which installs are supported (Steam layout, installed discs) and how the app checks them:
   [docs/GAME_DATA_SETUP.md](docs/GAME_DATA_SETUP.md).
 - The original file list for the Quest edition, which uses the same archives: [docs/HOWTO/GETTING_THE_GAME_FILES.md](docs/HOWTO/GETTING_THE_GAME_FILES.md).
-- Where files go today: the shell creates `Documents/GameData` inside its app container, which is visible in the Files
-  app (`UIFileSharingEnabled`). Picking a folder in place (security-scoped access) and a validating importer are planned.
-  Expect about 2.7 GB.
+- The importer is implemented: pick a folder (system file picker; a security-scoped "use in place" bookmark is also
+  supported), the app validates it against the same 20-archive/marker-file/string-table rules as the Quest edition,
+  then copies it into the app container with resumable, crash-safe, atomic import (verified: cancel-and-resume, and
+  a real `kill -9` mid-copy followed by a clean recovery). Expect about 2.7 GB and several minutes.
 
 ## Running on a physical Apple Vision Pro
 
@@ -107,33 +126,41 @@ The unsigned `device` build in step 3 of the quick start only proves that the co
 
 ## Controls
 
-Intended controls for the tabletop. **None of these commands is connected to a running game yet**; today the shell only
-places a test board and logs spatial events. The design and the reasoning (gaze is never continuous on visionOS, so a
-ray arrives only when a pinch begins) are in [docs/visionos-interaction.md](docs/visionos-interaction.md), which is the
-authoritative reference and may change these.
+Intended controls for the tabletop. The routing from gesture to engine call is implemented and unit-tested against a
+recording fake of the engine bridge (so the mapping is verified to match the Quest edition's own logic exactly), but
+**no control has been driven by a real running match or real spatial input yet** — the simulator cannot inject
+gaze/pinch/hand events, and no game data exists here to run a match against. The design and the reasoning (gaze is
+never continuous on visionOS, so a ray arrives only when a pinch begins) are in
+[docs/visionos-interaction.md](docs/visionos-interaction.md), which is the authoritative reference and may change these.
 
 | Gesture | Intended action | State |
 | --- | --- | --- |
-| Look at a unit or a point on the map, then pinch | Select a unit, or give the context order (move, attack) to the selected units | planned |
-| Pinch, hold and drag across the board | Box selection | planned |
-| Grab bar at the board edge, pinch and drag | Move the tabletop | planned |
-| Both hands pinching, spread or twist | Scale and rotate the tabletop | planned (events are computed, not connected) |
-| Look at the ground and pinch after choosing a building | Preview, then place; a rotate gesture and cancel are part of the design | planned |
-| Ground View: choose a ground spot to teleport there | Human-scale view of the battlefield; a matching exit gesture returns to the tabletop | planned, experimental even on Quest |
-| Recenter (button in the launcher window) | Place the tabletop in front of you again | button exists; not yet exercised in a test |
+| Look at a unit or a point on the map, then pinch | Select a unit, or give the context order (move, attack) to the selected units | routing implemented + unit-tested; never driven by real input |
+| Pinch, hold and drag across the board | Box selection | routing + rendering implemented; never driven by real input |
+| Grab bar at the board edge, pinch and drag | Move the tabletop | math implemented + unit-tested; never driven by real input |
+| Both hands pinching, spread or twist | Scale and rotate the tabletop | math implemented + unit-tested; never driven by real input |
+| Look at the ground and pinch after choosing a building | Preview, then place; a rotate gesture and cancel are part of the design | routing implemented; placement-legality query is an open item (see the test matrix) |
+| Ground View: choose a ground spot to teleport there | Human-scale view of the battlefield; a matching exit gesture returns to the tabletop | full plumbing implemented and visually verified with synthetic data; never used with real terrain |
+| Recenter, HUD ornament (Ground View toggle, Pause, Leave Tabletop) | Place the tabletop in front of you again / quick actions | implemented, opens without crashing in the simulator |
 
 ## Known problems
 
-- The game does not run. This is a foundation release: shell, ANGLE and design documents only.
-- Nothing has been tested on a real Apple Vision Pro. Stereo, comfort, thermals, frame rate and memory are unknown. The
-  simulator shows a single view at 60 Hz and has no hand tracking or plane detection.
-- Game speed is at risk of following the display rate (risk R1 in the architecture document); the fix is designed but not
-  applied because no engine frame runs yet.
-- ANGLE has no multiview and no S3TC/DXT texture formats; the engine's textures must be decoded on the CPU. Frame rate and
-  texture memory are unmeasured, and route B (a native Metal backend) is the fallback if ANGLE is too slow.
-- No text input (chat, save names), no audio, no Ground View, no movie playback and no multiplayer on visionOS. The Quest
-  LAN synchronisation problem described in [docs/WORKDIR/planning/MULTIPLAYER_STATUS.md](docs/WORKDIR/planning/MULTIPLAYER_STATUS.md)
-  applies here too.
+- **No real gameplay yet.** Everything up to and including the engine's INI/data-loading step now runs correctly on
+  visionOS with fabricated test data; the engine has never been run against real retail game data, so no map has
+  loaded, no battlefield has rendered, and no order has ever reached a real running match.
+- **Nothing has been tested on a real Apple Vision Pro.** Stereo (two eyes), comfort, thermals, frame rate, memory,
+  hand tracking, and plane/table detection are all unknown. The simulator renders a single view, has no hand
+  tracking or plane detection, and cannot inject spatial/pinch events.
+- ANGLE has no multiview and no S3TC/DXT texture formats; textures are decoded on the CPU (verified correct, 48/48
+  format checks) — its cost with real game textures is unmeasured. Route B (a native Metal D3D8 backend) remains
+  the documented fallback if ANGLE proves too slow on device.
+- Multiplayer/LAN is not wired up on visionOS yet (GameNetworkingSockets builds for both slices, but no session
+  source exists); the Quest LAN synchronisation problem in
+  [docs/WORKDIR/planning/MULTIPLAYER_STATUS.md](docs/WORKDIR/planning/MULTIPLAYER_STATUS.md) applies here too, and
+  is intentionally deprioritised behind skirmish per the engineering priority order.
+- See `docs/VISIONOS_TEST_MATRIX.md`'s "Known bugs / open items" section for specific, unclosed defects found during
+  this session's own testing (a placement-legality query, a Settings-page screenshot gap, and a SwiftUI ornament/
+  `@Environment` crash class already fixed in the three places it was found).
 - The ANGLE build uses a vendored copy from WebKit's tree with a small patch. It is a development dependency, not yet a
   reviewed redistributable.
 - Distribution outside your own devices (TestFlight, App Store) has not been analysed, including how GPLv3 and the store
