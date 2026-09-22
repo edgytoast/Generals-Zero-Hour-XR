@@ -12,7 +12,7 @@ struct UIWindowsCoordinator: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .modifier(HudOrnament(location: .launcher))
+            .hudOrnament(location: .launcher, model: model, store: store)
             .task {
                 guard !started else { return }
                 started = true

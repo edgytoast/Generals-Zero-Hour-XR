@@ -28,7 +28,7 @@ for f in files:
         if 'titleKey' in src[max(0, m.start()-800):m.start()]: used.add(m.group(1))
     for m in re.finditer(r'\("((?:[^"\\]|\\.)*)", \d\)', src): used.add(m.group(1))
     for m in re.finditer(r'\bxr\(\s*([a-z]+)\s*\)', src): pass
-same_ok = {'Audio', 'Decals', 'Ultra', 'Pause', 'Engine', 'Renderer', 'Menu', 'Phase', 'Synchronisation', 'Simulator'}
+same_ok = {'Audio', 'Decals', 'Ultra', 'Pause', 'Engine', 'Renderer', 'Menu', 'Phase', 'Synchronisation', 'Simulator', '720p', '1080p'}
 for k in sorted(used):
     if k not in entries: errors.append(f'no German entry for t("{k}")')
 for k, v in entries.items():

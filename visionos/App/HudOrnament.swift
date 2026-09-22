@@ -3,28 +3,26 @@ import SwiftUI
 /// The toolbar under the launcher and the Commands window: Ground View, Recenter, Pause, Menu and Leave Tabletop. They are the
 /// actions a player needs at arm's reach while the immersive space is open; each maps to an existing command
 /// (InteractionControls / GXEngineHost / dismissImmersiveSpace), none re-implements a rule.
-struct HudOrnament: ViewModifier {
+///
+/// A plain `View`, not a `ViewModifier`: its content is attached with `.ornament(...)` by the caller (see `hudOrnament(...)`
+/// below), which passes `model`/`store` in explicitly. `@Environment` read inside an ornament's content closure that is
+/// installed through a custom `ViewModifier`'s `body(content:)` was observed to fail at runtime on this SDK (xrOS 27.0
+/// simulator: "No Observable object of type AppModel found", `TransformOrnament.updateValue` in the crash trace) even
+/// though the ancestor view carries `.environment(model)`; passing the values explicitly sidesteps the SDK issue.
+struct HudOrnament: View {
     enum Location { case launcher, commands }
     let location: Location
+    let model: AppModel
+    let store: PanelStore
 
-    @Environment(AppModel.self) private var model
-    @Environment(PanelStore.self) private var store
     @Environment(\.dismissImmersiveSpace) private var dismissImmersiveSpace
     @Environment(\.openWindow) private var openWindow
     @State private var paused = false
 
-    func body(content: Content) -> some View {
-        content.ornament(attachmentAnchor: .scene(.bottom), contentAlignment: .top) {
-            bar
-                .padding(12)
-                .glassBackgroundEffect()
-        }
-    }
-
-    private var bar: some View {
+    var body: some View {
         let groundOn = store.groundViewRequested || store.snapshot.groundViewMode != 0
         let groundAvailable = store.snapshot.canObserveGround && store.snapshot.stereoVisible
-        return HStack(spacing: 12) {
+        HStack(spacing: 12) {
             Toggle(isOn: Binding(get: { groundOn }, set: { _ in store.toggleGroundView() })) {
                 Label(store.t("Ground View"), systemImage: "figure.walk")
             }
@@ -73,5 +71,17 @@ struct HudOrnament: ViewModifier {
         }
         .labelStyle(.titleAndIcon)
         .frame(minHeight: UITheme.minTarget)
+    }
+}
+
+extension View {
+    /// Attaches the HUD toolbar ornament. `model`/`store` are the caller's own `@Environment`-resolved instances (see the
+    /// type comment for why they are passed explicitly rather than re-read inside the ornament).
+    func hudOrnament(location: HudOrnament.Location, model: AppModel, store: PanelStore) -> some View {
+        ornament(attachmentAnchor: .scene(.bottom), contentAlignment: .top) {
+            HudOrnament(location: location, model: model, store: store)
+                .padding(12)
+                .glassBackgroundEffect()
+        }
     }
 }

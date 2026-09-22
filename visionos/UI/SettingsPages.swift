@@ -133,8 +133,9 @@ private struct GraphicsPage: View {
                 Row {
                     Picker(store.t("Render frame rate cap"), selection: $graphics.settings.renderFpsCap) {
                         ForEach(GraphicsSettings.fpsChoices, id: \.self) { fps in
-                            Text(fps == 0 ? store.t("Uncapped") : "\(fps)").tag(fps)
+                            Text("\(fps)").tag(fps)
                         }
+                        Text(store.t("Uncapped")).tag(GraphicsSettings.uncappedFps)
                     }
                     .pickerStyle(.segmented)
                 }
@@ -154,9 +155,19 @@ private struct GraphicsPage: View {
                     }
                     .pickerStyle(.segmented)
                 }
-                Caption(text: GraphicsBackend.engineSetterAvailable ?
-                        store.t("Applied on the engine thread. Changes to the render scale and the eye size take effect when the tabletop is entered again.") :
-                        store.t("Stored for the engine host. The engine-side setter arrives with the presentation package."))
+                Row {
+                    Picker(store.t("UI resolution"), selection: $graphics.settings.uiResolution) {
+                        Text(store.t("720p")).tag(GraphicsSettings.UIResolution.p720)
+                        Text(store.t("1080p")).tag(GraphicsSettings.UIResolution.p1080)
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityHint(store.t("Read once at engine start. Takes effect the next time the tabletop is entered."))
+                }
+                Toggle(store.t("Comfort fade"), isOn: $graphics.settings.comfortFade)
+                    .accessibilityHint(store.t("A brief dark fade during Ground View enter, exit and teleport."))
+                Toggle(store.t("Focus marker"), isOn: $graphics.settings.focusMarker)
+                    .accessibilityHint(store.t("A pointer dot on panels and highlights on the grab bar while pinching."))
+                Caption(text: store.t("Applied on the engine thread. Changes to the render scale, eye size and UI resolution take effect when the tabletop is entered again."))
             }
         }
         .formStyle(.grouped)

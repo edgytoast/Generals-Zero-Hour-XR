@@ -7,6 +7,7 @@ import SwiftUI
 struct CommandsWindow: View {
     static let id = "commands"
 
+    @Environment(AppModel.self) private var appModel
     @Environment(PanelStore.self) private var store
     private let page = Int(GX_PANEL_COMMANDS)
 
@@ -30,7 +31,7 @@ struct CommandsWindow: View {
         .frame(minWidth: 620, idealWidth: 720, minHeight: 640)
         .appWindowStyle()
         .commandsHoverOrnament(store: store)
-        .modifier(HudOrnament(location: .commands))
+        .hudOrnament(location: .commands, model: appModel, store: store)
     }
 
     private var header: some View {
