@@ -38,6 +38,7 @@ targets:
       - path: ANGLE
       - path: Input
       - path: GameData
+      - path: UI
       - path: Platform
         buildPhase: none        # headers only; referenced through HEADER_SEARCH_PATHS
       - path: Resources
@@ -59,6 +60,7 @@ targets:
           - $(SRCROOT)/Input
           - $(SRCROOT)/GameData
           - $(SRCROOT)/Platform
+          - $(SRCROOT)/Audio        # GXAudioListener.h (header only here; the audio host sources are wired by their own package)
           # Engine host headers (GXEngineHost.h, GXEngineHostServices.h): plain C, included straight from the engine tree so the
           # relative include of Platform/XRPresentation.h inside them resolves (the xcframework copy is only for linking).
           - $(SRCROOT)/../GeneralsMD/Code/Main/visionos
