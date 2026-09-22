@@ -1511,7 +1511,10 @@ static void xrIssueMovement(XrOrderMode mode,const Coord3D &ground,bool queue) {
 	TheInGameUI->clearAttackMoveToMode();if(oldAttack)TheInGameUI->toggleAttackMoveToMode();
 }
 void XrGameBoot_SpatialClick(bool cancel) {
-	if(!s_spatialActive || !XrGameBoot_CanAdjustWorld() || !TheInGameUI || !TheMessageStream || !TheGameClient) return;
+	if(!s_spatialActive || !XrGameBoot_CanAdjustWorld() || !TheInGameUI || !TheMessageStream || !TheGameClient) {
+		GXLOG("P7.4 spatial click ignored active=%d adjust=%d",int(s_spatialActive),int(XrGameBoot_CanAdjustWorld()));
+		return;
+	}
 	if(cancel) {
 		s_groupNotice="";
 		if(s_tactics.mode!=XrOrderMode::Context || s_tactics.cornerKnown || s_tactics.queue) xrCancelTactics();

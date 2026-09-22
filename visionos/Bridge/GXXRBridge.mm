@@ -846,6 +846,7 @@ static void GXXRDebugDumpTexture(id<MTLCommandBuffer> cb, id<MTLTexture> tex, NS
     }
     const CFTimeInterval tComp1 = CACurrentMediaTime();
 
+    [self encodeTrackingAreas:drawable commandBuffer:cb];
     cp_drawable_encode_present(drawable, cb);
     [cb commit];
     if (result != XR_FRAME_SKIP) (*presented)++;
@@ -868,6 +869,34 @@ static void GXXRDebugDumpTexture(id<MTLCommandBuffer> cb, id<MTLTexture> tex, NS
 
 /// Engine mode: publish this display frame's head/eye snapshot to the engine thread, then composite the LATEST COMPLETED
 /// engine frame (or the loading indicator when there is none). Never waits for the engine, never touches GL.
+// Marks every pixel of every view as one tracking area (visionOS 26). A look-and-pinch on Metal content is attributed to
+// the tracking area under the gaze; with no area drawn the system sends indirect pinches with a zero selection ray, so
+// the interaction layer cannot aim at the board. The tabletop and its panels are all one area: the interaction layer
+// does its own hit testing from the ray.
+- (void)encodeTrackingAreas:(cp_drawable_t)drawable commandBuffer:(id<MTLCommandBuffer>)cb {
+    const size_t count = cp_drawable_get_tracking_areas_texture_count(drawable);
+    if (count == 0) return;
+    static const cp_tracking_area_identifier kTabletopArea = 1;
+    cp_tracking_area_t area = cp_drawable_add_tracking_area(drawable, kTabletopArea);
+    const cp_tracking_area_render_value value = cp_tracking_area_get_render_value(area);
+    for (size_t i = 0; i < count; ++i) {
+        id<MTLTexture> tex = cp_drawable_get_tracking_areas_texture(drawable, i);
+        if (!tex) continue;
+        const NSUInteger slices = tex.textureType == MTLTextureType2DArray ? tex.arrayLength : 1;
+        for (NSUInteger slice = 0; slice < slices; ++slice) {
+            MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
+            pass.colorAttachments[0].texture = tex;
+            pass.colorAttachments[0].slice = slice;
+            pass.colorAttachments[0].loadAction = MTLLoadActionClear;
+            pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+            pass.colorAttachments[0].clearColor = MTLClearColorMake((double)value, 0, 0, 0);
+            id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:pass];
+            enc.label = @"GXXR tracking area";
+            [enc endEncoding];
+        }
+    }
+}
+
 - (void)encodeEngineFrame:(cp_drawable_t)drawable
                      info:(XRFrameInfo&)info
                    anchor:(ar_device_anchor_t)anchor
@@ -1076,6 +1105,7 @@ static void GXXRDebugDumpTexture(id<MTLCommandBuffer> cb, id<MTLTexture> tex, NS
         (*presented)++;
     }
     (void)firstColor; (void)firstDepth; (void)firstSlice;
+    [self encodeTrackingAreas:drawable commandBuffer:cb];
     cp_drawable_encode_present(drawable, cb);
     _accComposite += (CACurrentMediaTime() - tComp0) * 1000.0;
 }

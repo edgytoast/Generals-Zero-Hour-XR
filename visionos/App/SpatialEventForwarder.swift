@@ -81,7 +81,7 @@ enum SpatialEventForwarder {
 
             received += 1
             if received <= 5 || received % 60 == 0 {
-                inputLog.info("spatial event #\(received) kind=\(raw.kind) phase=\(raw.phase) ray=\(raw.has_ray) pose=\(raw.has_pose) mods=\(raw.modifiers) area=\(raw.tracking_area_id)")
+                inputLog.info("spatial event #\(received) kind=\(raw.kind) phase=\(raw.phase) ray=\(raw.has_ray) o=\(raw.ray_origin.0),\(raw.ray_origin.1),\(raw.ray_origin.2) d=\(raw.ray_direction.0),\(raw.ray_direction.1),\(raw.ray_direction.2) pose=\(raw.has_pose) p=\(raw.pose_position.0),\(raw.pose_position.1),\(raw.pose_position.2) mods=\(raw.modifiers) area=\(raw.tracking_area_id)")
             }
             GXXRInputPushRawSpatialEvent(&raw)
         }

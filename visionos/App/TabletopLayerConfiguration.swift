@@ -27,6 +27,17 @@ struct TabletopLayerConfiguration: CompositorLayerConfiguration {
 
         configuration.isFoveationEnabled = false
 
+        // Tracking areas (visionOS 26): a look-and-pinch on Metal content is attributed to the tracking area drawn under
+        // the gaze. Without one the system sends indirect pinches with a zero selection ray and no location, so the app
+        // cannot tell where the player looked (seen in the xrOS 27 simulator). The bridge marks the whole view as one area
+        // each frame (GXXRBridge.mm, encodeTrackingAreas).
+        let trackingFormats = capabilities.supportedTrackingAreasFormats
+        if let fmt = [MTLPixelFormat.r8Uint, .r16Uint].first(where: trackingFormats.contains) ?? trackingFormats.first {
+            configuration.trackingAreasFormat = fmt
+            configuration.trackingAreasUsage = [.renderTarget, .shaderRead]
+        }
+        configLog.info("tracking area formats=\(String(describing: trackingFormats), privacy: .public)")
+
         let layouts = capabilities.supportedLayouts(options: [])
         var chosen: LayerRenderer.Layout = layouts.contains(.layered) ? .layered : (layouts.contains(.shared) ? .shared : .dedicated)
         switch LaunchOptions.forcedLayout {

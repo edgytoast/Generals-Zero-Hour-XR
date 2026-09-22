@@ -11,6 +11,16 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <cstdio>
+#include <cstdlib>
+
+namespace {
+// GX_DEBUG_INPUT=1: one stderr line per pinch start and end (role, target, ray). Off by default.
+bool debugInput() {
+	static const bool on = [] { const char *v = getenv("GX_DEBUG_INPUT"); return v && v[0] == '1'; }();
+	return on;
+}
+} // namespace
 
 namespace {
 
@@ -505,6 +515,9 @@ void VisionInteraction::endPointer(const XRInteractionEvent &ev, bool cancelled)
 	p->hostEnd = host_.time_s;
 	if (cancelled) { ++stats_.cancels; cancelPointer(*p, false); return; }
 	Ptr *o = other(p);
+	if (debugInput())
+		fprintf(stderr, "[vision-input] end role=%d travel=%.3f picked=%d hit=(%.1f,%.1f)\n", int(p->role), p->travel,
+			int(p->pickedStart), p->startHit.x, p->startHit.y);
 	switch (p->role) {
 	case Role::Select: releaseSelect(*p); break;
 	case Role::Box: releaseBox(*p); break;
@@ -765,6 +778,7 @@ VisionInteraction::Target VisionInteraction::classify(const Ptr &p, uint32_t are
 
 // =============================================================== roles
 
+
 void VisionInteraction::makeCursor(Ptr &p, XrVector3f planeP, XrVector3f planeN, XrVector3f start) {
 	PlaneCursor c;
 	c.valid = true;
@@ -860,6 +874,12 @@ void VisionInteraction::startRole(Ptr &p) {
 		else p.role = Role::Miss;
 		break;
 	}
+	if (debugInput())
+		fprintf(stderr, "[vision-input] start kind=%d target=%d panel=%d role=%d picked=%d ray=%d o=(%.2f,%.2f,%.2f) d=(%.2f,%.2f,%.2f) "
+			"plane=(%.2f,%.2f,%.2f) board=(%.2f,%.2f,%.2f) canAdjust=%d expanded=%d\n",
+			int(p.kind), int(t.kind), t.panel, int(p.role), int(p.pickedStart), int(p.hasRay), p.rayO.x, p.rayO.y, p.rayO.z,
+			p.rayD.x, p.rayD.y, p.rayD.z, t.planePoint.x, t.planePoint.y, t.planePoint.z, board_.pose.position.x,
+			board_.pose.position.y, board_.pose.position.z, int(e.canAdjustWorld), int(e.expandedUI));
 }
 
 // Second pinch while another is held.
