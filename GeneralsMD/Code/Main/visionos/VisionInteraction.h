@@ -44,7 +44,8 @@ struct VisionConfig {
 	// --- board regions (board-local metres) ---
 	float rimInnerM = 0.01f;              // pan handle band starts this far inside the map edge ...
 	float rimOuterM = 0.07f;              // ... and ends this far outside it
-	float grabBarOffsetM = 0.11f;         // centre of the grab bar in front of the near edge
+	float grabBarOffsetM = 0.33f;         // centre of the grab bar in front of the near edge: beyond the control-bar console,
+	                                      // which reaches ~0.28 m (visionUiBarReachM), so the console never hides the bar
 	float grabBarThicknessM = 0.05f;
 	float grabBarPadM = 0.02f;            // gaze tolerance around the visible bar
 	float grabBarLengthFraction = 0.30f;  // of the board width, clamped
@@ -54,9 +55,9 @@ struct VisionConfig {
 	float boardDefaultWidthM = 1.0f;
 	float boardMinWidthM = 0.45f;         // XrSurfaceGrab lower bound: units stay readable
 	float boardMaxWidthM = 2.0f;          // comfortable upper bound (95 degrees wide at 0.9 m)
-	float initialDistanceM = 0.9f;
-	float headRelativeDistanceM = 1.25f;  // simulator-style origin at head height (same numbers as the shell)
-	float headRelativeDropM = 0.45f;      // board this far below the eyes when origin is not on the floor
+	float initialDistanceM = 1.0f;        // board centre ahead of the head (floor origin); the console sits in front of it
+	float headRelativeDistanceM = 1.45f;  // simulator-style origin at head height (same numbers as the shell): board, console
+	float headRelativeDropM = 0.35f;      // and far HUD band all fit the simulator's 59-degree vertical view
 	float floorOriginTableHeightM = 0.8f; // XR_TABLETOP_SURFACE_HEIGHT_M
 	float boardMinHeadDistanceM = 0.35f, boardMaxHeadDistanceM = 3.0f;
 	float boardMinBelowHeadM = 0.10f, boardMaxBelowHeadM = 1.40f;

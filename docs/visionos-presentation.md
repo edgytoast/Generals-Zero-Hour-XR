@@ -82,16 +82,27 @@ function so they cannot diverge:
   at the workspace's upright-screen surface (`visionScreenSurface`, `VisionWorkspace::screenSurface`).
 * **Tabletop, planar** (stereo not eligible): the `WORLD` target cropped to `XrGameBoot_WorldRect()`, flat on the
   board surface, plus the UI pieces below.
-* **Tabletop, stereo**: the `UI` target's control-bar band (`xrUIPieceRect(2, ...)`, the whole canvas while a dialog
-  owns it) and the transparent HUD band above it (`xrUIPieceRect(3, ...)`), positioned by `visionUiBarSurface` /
-  `visionUiPieceSurface` — the direct port of the Quest's `XrLayout::applyTabletopPreset` / `displayedSurface`: the
-  canvas stands behind the board's far edge, leaning back 24 degrees (`kVisionUiLeanBackRad`) toward the player.
+* **Tabletop, stereo**: the `UI` target cropped with the Quest rectangles (`xrUIPieceRect`), placed around the board:
+  - the **control bar** (`xrUIPieceRect(2, ...)`) lies on a console in front of the board's near edge
+    (`visionUiBarSurface`): 1.10 m wide, tilted 18 degrees up toward the player, its top edge 9 cm out from the near
+    edge (clear of the 7 cm pan rim), bottom edge 1 cm above the table. It reaches about 0.26 m toward the player
+    (`visionUiBarReachM`); the table's grab bar sits beyond it at 0.33 m (`VisionConfig::grabBarOffsetM`).
+  - the transparent **HUD band** (`xrUIPieceRect(3, ...)`: mission text, timers, messages) stands behind the far edge,
+    1.30 m wide, leaning back 24 degrees (`kVisionUiLeanBackRad`), its bottom edge 0.10 m behind the edge and 3 cm up
+    (`visionUiFarSurface`).
+  - while a **dialog** owns the canvas, the whole canvas stands there instead, 1.60 m wide (`kVisionUiCanvasWidthM`).
+  - Pinches on the console and the HUD band count only where the engine has a window under the point
+    (`XrGameBoot_HasUIAt`), so their see-through parts never block the map. A dialog canvas catches every pinch.
+
+  This deliberately differs from the Quest preset (`XrLayout::applyTabletopPreset`, whole canvas behind the far edge):
+  on Vision Pro the opaque bar behind the map read as a wall above the battlefield (2026-09-22, first real-data run).
 * **GroundView**: no panels — the observer has the whole view, same as the Quest hiding every surface.
 
-Panel/canvas numbers (`VisionPresentationLogic.h:248-255`): upright screen 1.35 m wide, 1.10 m ahead of the launch
-heading, 0.02 m below eye level (Quest `relative[0]`); tabletop UI canvas 1.60 m wide (the Quest's 1.8 m targets a
-1.65 m board; ours is proportional to `kVisionUiCanvasWidthM`), 0.10 m gap from the board's far edge, 0.03 m lift
-above the table plane, 4 mm marker lift in front of a panel it shares a plane with.
+Default board placement (`VisionConfig`, mirrored in `GXXRBridge.mm`): with a floor origin the board centre is 1.0 m
+ahead of the head at 0.8 m table height (was 0.9 m; the console needs room in front); with a head-height origin
+(simulator) 1.45 m ahead and 0.35 m below the eyes (was 1.25 m / 0.45 m) so the console, the board and the HUD band
+all fit the simulator's 59-degree vertical view. The upright screen is 1.35 m wide, 1.10 m ahead of the launch
+heading, 0.02 m below eye level (Quest `relative[0]`); markers lift 4 mm in front of a panel they share a plane with.
 
 ## 4. Readability
 
@@ -101,15 +112,15 @@ against a Vision Pro's roughly 34 display-pixels-per-degree foveal resolution. M
 `scripts/qa/vision-presentation-test.sh` against the real panel geometry above (1280-wide engine UI backbuffer):
 
 ```
-tabletop UI canvas: 1.60 m wide at 1.37 m (eye to bar center): 3.13 arcmin/texel
-  glyph 8/10/12 px = 25.1 / 31.3 / 37.6 arcmin      720p: 0.56 texel/display px   1080p: 0.84
+control-bar console: 1.10 m wide at 0.67 m (eye to bar center): 4.40 arcmin/texel
+  glyph 8/10/12 px = 35.2 / 44.0 / 52.8 arcmin      720p: 0.40 texel/display px   1080p: 0.60
 upright screen:      1.35 m wide at 1.10 m:          3.30 arcmin/texel
   glyph 8/10/12 px = 26.4 / 33.0 / 39.5 arcmin
 ```
 
 A comfortable minimum for body text is generally cited around 15-20 arcminutes; the smallest ControlBar glyphs (the
-engine's 8 px bitmap font, used for secondary labels) land at 25-26 arcminutes at these distances/widths — legible,
-with headroom. `texelsPerDisplayPixel` < 1 at 720p (0.56/0.84) means the panel is shown *larger* than native texel
+engine's 8 px bitmap font, used for secondary labels) land at 35 arcminutes on the near console (26 on the upright
+screen) — legible, with headroom (the old far canvas gave 25). `texelsPerDisplayPixel` < 1 at 720p (0.40/0.60) means the panel is shown *larger* than native texel
 resolution: the engine UI texture is magnified, not minified, so no engine-side text was made too small to resolve.
 Package F's `GXUIResolution` setting (`GX_UI_1080P`) raises `texelsPerDisplayPixel` toward 1:1 for players who prefer
 the extra sharpness over slightly softer default scaling; the geometry (panel size/distance) does not change with it.
@@ -285,8 +296,8 @@ Host tests (pure logic, no simulator, no game data):
 
 ```
 $ scripts/qa/vision-presentation-test.sh
-readability: tabletop UI canvas 1.60 m wide at 1.37 m ... (section 4 numbers)
-vision-presentation-test: 303 checks passed
+readability: control-bar console 1.10 m wide at 0.67 m ... (section 4 numbers)
+vision-presentation-test: 321 checks passed
 
 $ scripts/qa/vision-interaction-test.sh --existing
 PASS 181909 vision interaction checks

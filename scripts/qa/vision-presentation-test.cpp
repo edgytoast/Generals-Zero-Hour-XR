@@ -383,42 +383,58 @@ static void testLayout() {
 	const XrGameRect bar = li.commandRect;
 	NEAR(p.layers[0].uvRect[1], 0.0f); NEAR(p.layers[0].uvRect[3], bar.h);
 	NEAR(p.layers[1].uvRect[1], bar.h); NEAR(p.layers[1].uvRect[3], 1.0f - bar.h);
-	// together they tile the canvas: the HUD's bottom edge is the bar's top edge, same width, same plane
 	const float full = 720.0f / 1280.0f;
 	const XrSurface s0 = p.panels[0].surface, s1 = p.panels[1].surface;
-	const XrVector3f up0 = xrRotate(s0.pose.orientation, {0, 1, 0});
-	const float barTop = xrDot(xrSub(s0.pose.position, s0.pose.position), up0) + 0.5f * p.layers[0].size[1];
-	const float hudBottom = xrDot(xrSub(s1.pose.position, s0.pose.position), up0) - 0.5f * p.layers[1].size[1];
-	NEAR(barTop, hudBottom);
-	NEAR(p.layers[0].size[1] + p.layers[1].size[1], full * s0.width);
-	CHECK(vnear(xrRotate(s0.pose.orientation, {0, 0, 1}), xrRotate(s1.pose.orientation, {0, 0, 1})));
-	// the canvas leans back 24 degrees toward the player: normal points up and toward the near edge (board local -Y)
-	const XrVector3f n = xrRotate(s0.pose.orientation, {0, 0, 1});
-	const XrVector3f nBoard = visionBoardToLocal(li.board, xrAdd(li.board.pose.position, n));
-	NEARE(nBoard.z, std::sin(kVisionUiLeanBackRad), 1e-3f);
-	NEARE(nBoard.y, -std::cos(kVisionUiLeanBackRad), 1e-3f);
-	// it stands behind the far edge with the configured gap and lift (bottom edge of the canvas)
+	const float hy = li.board.width * li.boardAspect * 0.5f;
+	const auto edgeLocal = [&](const XrSurface &sf, float height, float sign) {
+		const XrVector3f up = xrRotate(sf.pose.orientation, {0, 1, 0});
+		return visionBoardToLocal(li.board, xrAdd(sf.pose.position, xrScale(up, sign * 0.5f * height)));
+	};
+	const auto normalLocal = [&](const XrSurface &sf) {
+		return visionBoardToLocal(li.board, xrAdd(li.board.pose.position, xrRotate(sf.pose.orientation, {0, 0, 1})));
+	};
+	// the bar is the near console: 1.10 m wide, tilted up 18 degrees toward the player, top edge 9 cm in front of the near edge,
+	// bottom edge 1 cm above the table, centred
+	NEAR(p.layers[0].size[0], kVisionUiBarWidthM);
+	NEAR(p.layers[0].size[1], kVisionUiBarWidthM * full * bar.h);
 	{
-		const XrVector3f up = xrRotate(s0.pose.orientation, {0, 1, 0});
-		const XrVector3f bottom = xrSub(s0.pose.position, xrScale(up, 0.5f * p.layers[0].size[1]));
-		const XrVector3f local = visionBoardToLocal(li.board, bottom);
-		NEARE(local.y, li.board.width * li.boardAspect * 0.5f + kVisionUiGapM, 1e-3f);
-		NEARE(local.z, kVisionUiLiftM, 1e-3f);
-		NEARE(local.x, 0.0f, 1e-3f);
+		const XrVector3f n = normalLocal(s0);
+		NEARE(n.z, std::cos(kVisionUiBarTiltRad), 1e-3f);
+		NEARE(n.y, -std::sin(kVisionUiBarTiltRad), 1e-3f); // faces the player
+		const XrVector3f top = edgeLocal(s0, p.layers[0].size[1], 1.0f), bottom = edgeLocal(s0, p.layers[0].size[1], -1.0f);
+		NEARE(top.y, -(hy + kVisionUiBarGapM), 1e-3f);
+		NEARE(bottom.z, kVisionUiBarLiftM, 1e-3f);
+		CHECK(bottom.y < top.y && top.z > bottom.z); // the top edge is the map side and higher
+		NEARE(top.x, 0.0f, 1e-3f);
+		NEARE(-bottom.y - hy, visionUiBarReachM(full, bar), 1e-3f);
+		// it never covers the map and stays clear of the grab bar in front of it (VisionConfig::grabBarOffsetM = 0.33 m, 5 cm thick)
+		CHECK(top.y < -hy - 0.07f);
+		CHECK(visionUiBarReachM(full, bar) < 0.33f - 0.025f);
 	}
-	// expanded (a dialog): one piece, the whole canvas, sharing the bottom edge of the compact bar
+	// the HUD band stands behind the far edge, leaning back 24 degrees, 1.30 m wide, bottom edge 10 cm behind the edge, 3 cm up
+	NEAR(p.layers[1].size[0], kVisionUiHudWidthM);
+	NEAR(p.layers[1].size[1], kVisionUiHudWidthM * full * (1.0f - bar.h));
+	{
+		const XrVector3f n = normalLocal(s1);
+		NEARE(n.z, std::sin(kVisionUiLeanBackRad), 1e-3f);
+		NEARE(n.y, -std::cos(kVisionUiLeanBackRad), 1e-3f);
+		const XrVector3f bottom = edgeLocal(s1, p.layers[1].size[1], -1.0f);
+		NEARE(bottom.y, hy + kVisionUiGapM, 1e-3f);
+		NEARE(bottom.z, kVisionUiLiftM, 1e-3f);
+		NEARE(bottom.x, 0.0f, 1e-3f);
+	}
+	// expanded (a dialog): one piece, the whole canvas, 1.60 m wide, behind the far edge where the HUD band starts
 	li.expandedUI = true;
 	VisionPanelPlan e;
 	visionLayoutPanels(li, e);
 	CHECK(e.layerCount == 1 && e.panelCount == 1 && e.panels[0].kind == kVisionPanelGameUI);
 	NEAR(e.layers[0].uvRect[2], 1.0f); NEAR(e.layers[0].uvRect[3], 1.0f);
+	NEAR(e.layers[0].size[0], kVisionUiCanvasWidthM);
 	NEAR(e.layers[0].size[1], full * e.layers[0].size[0]);
 	{
-		const XrSurface se = e.panels[0].surface;
-		const XrVector3f upE = xrRotate(se.pose.orientation, {0, 1, 0});
-		const XrVector3f bottomE = xrSub(se.pose.position, xrScale(upE, 0.5f * e.layers[0].size[1]));
-		const XrVector3f bottomC = xrSub(s0.pose.position, xrScale(up0, 0.5f * p.layers[0].size[1]));
-		CHECK(vnear(bottomE, bottomC));
+		const XrVector3f bottom = edgeLocal(e.panels[0].surface, e.layers[0].size[1], -1.0f);
+		NEARE(bottom.y, hy + kVisionUiGapM, 1e-3f);
+		NEARE(bottom.z, kVisionUiLiftM, 1e-3f);
 	}
 	li.expandedUI = false;
 	// planar world (not stereo eligible): the world crop on the board + the UI pieces
@@ -458,10 +474,13 @@ static void testLayout() {
 	li.board = flatBoard({0.4f, 0.9f, -1.3f}, 1.6f, 0.7f);
 	VisionPanelPlan moved;
 	visionLayoutPanels(li, moved);
-	NEAR(moved.layers[0].size[0], kVisionUiCanvasWidthM);
+	NEAR(moved.layers[0].size[0], kVisionUiBarWidthM);
+	NEAR(moved.layers[1].size[0], kVisionUiHudWidthM);
 	const XrVector3f ln = visionBoardToLocal(li.board, {moved.layers[0].position[0], moved.layers[0].position[1], moved.layers[0].position[2]});
-	CHECK(ln.y > li.board.width * li.boardAspect * 0.5f); // behind the (larger) far edge
+	CHECK(ln.y < -li.board.width * li.boardAspect * 0.5f); // bar: in front of the (larger) near edge
 	NEARE(ln.x, 0.0f, 1e-3f);
+	const XrVector3f lh = visionBoardToLocal(li.board, {moved.layers[1].position[0], moved.layers[1].position[1], moved.layers[1].position[2]});
+	CHECK(lh.y > li.board.width * li.boardAspect * 0.5f); // HUD: behind the far edge
 	// exceptional inputs never produce NaN layers
 	li.commandRect = {0, 0, 0, 0};
 	VisionPanelPlan degenerate;
@@ -579,33 +598,33 @@ static void testHitTesting() {
 		CHECK((f.flags & GX_FB_PANEL_POINTER) && f.pointerLayer == 0);
 		VNEAR((XrVector3f{f.pointerPos[0], f.pointerPos[1], f.pointerPos[2]}), xrAdd(corner, xrRotate(sc.pose.orientation, {0, 0, kVisionLayerLiftM})));
 	}
-	// text-size consistency: a pixel of the UI target has the same physical size on the bar and on the HUD piece
-	{
-		const float texelBar = plan.panels[0].surface.width / (plan.panels[0].rect.w * 1280.0f);
-		const float texelHud = plan.panels[1].surface.width / (plan.panels[1].rect.w * 1280.0f);
-		NEAR(texelBar, texelHud);
-		const float vBar = plan.layers[0].size[1] / (plan.panels[0].rect.h * 720.0f);
-		NEAR(vBar, texelBar);
+	// square texels on both pieces (no stretched text). The bar is smaller (1.10 m) than the HUD band (1.30 m) but much nearer.
+	for (int i = 0; i < 2; ++i) {
+		const float texelU = plan.panels[i].surface.width / (plan.panels[i].rect.w * 1280.0f);
+		const float texelV = plan.layers[i].size[1] / (plan.panels[i].rect.h * 720.0f);
+		NEAR(texelU, texelV);
 	}
 }
 
 // =========================================================================================== 6. readability
 static void testReadability() {
-	// UI text of 1280x720 on the tabletop canvas seen from the default seat: head 0.9 m ahead of the board center, 0.45 m above the table
+	// UI text of 1280x720 on the control-bar console seen from the default seat: head 1.0 m behind the board center
+	// (VisionConfig::initialDistanceM), 0.45 m above the table
 	VisionLayoutInput li;
 	li.mode = VisionPresentationMode::Tabletop;
 	li.boardPlaced = true;
-	li.board = flatBoard({0, 0.0f, -0.9f}, 1.0f);   // table at y = 0
+	li.board = flatBoard({0, 0.0f, -1.0f}, 1.0f);   // table at y = 0
 	li.commandRect = xrCommandRect(0.30f);
 	VisionPanelPlan plan;
 	visionLayoutPanels(li, plan);
 	const XrVector3f head = {0, 0.45f, 0};
 	const float dBar = visionDistanceToSurface(head, plan.panels[0].surface);
 	const VisionReadability r10 = visionReadability(plan.panels[0].surface.width, 1280, dBar, 10.0f);
-	// documented numbers (docs/visionos-presentation.md section 5): distance ~1.4 m, ~2.9 arcmin per texel, a 10 px glyph ~ 29 arcmin
-	NEARE(dBar, 1.39f, 0.08f);
-	NEARE(r10.arcminPerTexel, 3.0f, 0.3f);
-	CHECK(r10.glyphArcmin >= 24.0f && r10.glyphArcmin <= 36.0f);
+	// documented numbers (docs/visionos-presentation.md section 5): distance ~0.68 m, ~4.4 arcmin per texel, a 10 px glyph ~ 44 arcmin
+	// (the near console reads larger than the old far canvas: 1.39 m away, 3.0 arcmin per texel)
+	NEARE(dBar, 0.68f, 0.03f);
+	NEARE(r10.arcminPerTexel, 4.37f, 0.2f);
+	CHECK(r10.glyphArcmin >= 38.0f && r10.glyphArcmin <= 50.0f);
 	// the smallest text (8 px) still reads at the readability floor of 20 arcmin
 	const VisionReadability r8 = visionReadability(plan.panels[0].surface.width, 1280, dBar, 8.0f);
 	CHECK(r8.glyphArcmin >= 20.0f);
@@ -627,9 +646,9 @@ static void testReadability() {
 	// 1920 wide UI on the same panel is sampled about 1:1 at 34 px/degree, 1280 is magnified
 	const VisionReadability d720 = visionReadability(plan.panels[0].surface.width, 1280, dBar, 10.0f, 34.0f);
 	const VisionReadability d1080 = visionReadability(plan.panels[0].surface.width, 1920, dBar, 10.0f, 34.0f);
-	CHECK(d720.texelsPerDisplayPixel < 0.65f && d1080.texelsPerDisplayPixel > 0.8f && d1080.texelsPerDisplayPixel < 1.1f);
+	CHECK(d720.texelsPerDisplayPixel < 0.45f && d1080.texelsPerDisplayPixel > 0.55f && d1080.texelsPerDisplayPixel < 0.7f); // magnified: soft, never aliased
 	// the audit table of docs/visionos-presentation.md section 5 (printed so the document can quote the run)
-	printf("readability: tabletop UI canvas %.2f m wide at %.2f m (eye to bar center): %.2f arcmin/texel; glyph 8/10/12 px = %.1f / %.1f / %.1f arcmin; "
+	printf("readability: control-bar console %.2f m wide at %.2f m (eye to bar center): %.2f arcmin/texel; glyph 8/10/12 px = %.1f / %.1f / %.1f arcmin; "
 		"720p %.2f texel/display px, 1080p %.2f\n", plan.panels[0].surface.width, dBar, r10.arcminPerTexel, r8.glyphArcmin, r10.glyphArcmin,
 		visionReadability(plan.panels[0].surface.width, 1280, dBar, 12.0f).glyphArcmin, d720.texelsPerDisplayPixel, d1080.texelsPerDisplayPixel);
 	printf("readability: upright screen %.2f m wide at %.2f m: %.2f arcmin/texel; glyph 8/10/12 px = %.1f / %.1f / %.1f arcmin\n", kVisionScreenWidthM, dScreen,

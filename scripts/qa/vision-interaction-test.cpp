@@ -275,29 +275,29 @@ static void testHelpers() {
 	VisionHostState host;
 	host.head.position = {0, 1.6f, 0};
 	XrSurface s = visionInitialBoard(cfg, host, 1.0f);
-	VNEAR(s.pose.position, (XrVector3f{0, 0.8f, -0.9f}));
+	VNEAR(s.pose.position, (XrVector3f{0, 0.8f, -cfg.initialDistanceM}));
 	NEAR(s.width, 1.0f);
 	VNEAR(xrRotate(s.pose.orientation, {0, 0, 1}), (XrVector3f{0, 1, 0})); // flat, normal up
 	// head turned 90 degrees to face +X: the board is ahead, yaw only, still flat
 	host.head.orientation = xrAxisAngle({0, 1, 0}, -1.57079633f);
 	s = visionInitialBoard(cfg, host, 1.0f);
-	VNEAR(s.pose.position, (XrVector3f{0.9f, 0.8f, 0}));
+	VNEAR(s.pose.position, (XrVector3f{cfg.initialDistanceM, 0.8f, 0}));
 	VNEAR(xrRotate(s.pose.orientation, {0, 0, 1}), (XrVector3f{0, 1, 0}));
 	VNEAR(xrRotate(s.pose.orientation, {0, 1, 0}), (XrVector3f{1, 0, 0})); // far edge points away from the viewer
 	// head pitched down 40 degrees: heading ignores pitch
 	host.head.orientation = xrMul(xrAxisAngle({0, 1, 0}, 0.3f), xrAxisAngle({1, 0, 0}, -0.7f));
 	s = visionInitialBoard(cfg, host, 1.0f);
-	NEAR(xrLength(xrSub({s.pose.position.x, 0, s.pose.position.z}, {0, 0, 0})), 0.9f);
+	NEAR(xrLength(xrSub({s.pose.position.x, 0, s.pose.position.z}, {0, 0, 0})), cfg.initialDistanceM);
 	// simulator style head-relative origin
 	host.head = {{0, 0, 0, 1}, {0, 0, 0}};
 	s = visionInitialBoard(cfg, host, 1.0f);
-	VNEAR(s.pose.position, (XrVector3f{0, -0.45f, -1.25f}));
+	VNEAR(s.pose.position, (XrVector3f{0, -cfg.headRelativeDropM, -cfg.headRelativeDistanceM}));
 	// ARKit table wins
 	host.tableHeightKnown = true;
 	host.tableHeight = 0.72f;
 	s = visionInitialBoard(cfg, host, 1.0f);
 	NEAR(s.pose.position.y, 0.72f);
-	NEAR(s.pose.position.z, -0.9f);
+	NEAR(s.pose.position.z, -cfg.initialDistanceM);
 	// width clamp
 	NEAR(visionInitialBoard(cfg, host, 9.0f).width, cfg.boardMaxWidthM);
 	NEAR(visionInitialBoard(cfg, host, 0.01f).width, cfg.boardMinWidthM);
@@ -334,7 +334,7 @@ static void testInitialPlacementProposal() {
 	Sim s(false);
 	s.frame();
 	CHECK(s.out.boardChanged);
-	VNEAR(s.out.board.pose.position, (XrVector3f{0, 0.8f, -0.9f}));
+	VNEAR(s.out.board.pose.position, (XrVector3f{0, 0.8f, -VisionConfig().initialDistanceM}));
 	CHECK(s.out.grabBar.visible);
 	CHECK(s.out.regionCount >= 6);
 	// applying the proposal makes the next frame stable
@@ -822,7 +822,7 @@ static void testTwoHandCamera() {
 
 static void testWorkspace() {
 	const float hy = 0.5625f * 0.5f;
-	const float barY = -(hy + 0.11f);
+	const float barY = -(hy + VisionConfig().grabBarOffsetM);
 	// ---- one hand on the grab bar moves the board (translation only, gain 1.5)
 	{
 		Sim s;
@@ -911,7 +911,7 @@ static void testWorkspace() {
 		s.command(XR_CMD_RECENTER_BOARD);
 		s.frame();
 		CHECK(s.out.boardChanged && s.out.events & kVisionEventRecentered);
-		VNEAR(s.out.board.pose.position, (XrVector3f{0, 0.8f, -0.9f}));
+		VNEAR(s.out.board.pose.position, (XrVector3f{0, 0.8f, -VisionConfig().initialDistanceM}));
 		NEAR(s.out.board.width, 1.7f);
 		s.host.board = flatBoard({1.2f, 0.7f, 1.5f}, 1.7f, 2.0f);
 		s.host.worldZoom = 2.2f;
@@ -1841,7 +1841,7 @@ static void testRegionsAndHover() {
 		NEAR(xrLength(xrSub(q[1], q[2])), 0.5625f);
 	}
 	// grab bar centre lies in front of the near edge, on the player's side
-	NEAR(s.out.grabBar.pose.position.z, -0.9f + (0.5625f * 0.5f + 0.11f));
+	NEAR(s.out.grabBar.pose.position.z, -0.9f + (0.5625f * 0.5f + VisionConfig().grabBarOffsetM));
 	// the system's tracking-area hint routes a pinch whose ray missed everything
 	Sim h;
 	h.begin(1, XR_HAND_RIGHT, {0, 1.9f, -2.0f}, H0());
@@ -2071,7 +2071,7 @@ static void testFrameDriver() {
 	CHECK(!d.host().engine.canObserveGround); // captured through the bridge
 	CHECK(d.host().engine.canAdjustWorld && d.host().engine.interactiveGame);
 	CHECK(out.boardChanged && d.boardPlaced());
-	VNEAR(world.board.pose.position, (XrVector3f{0, 0.8f, -0.9f}));
+	VNEAR(world.board.pose.position, (XrVector3f{0, 0.8f, -VisionConfig().initialDistanceM}));
 	NEAR(world.board.width, 1.0f);
 	NEAR(world.coverage, xrMapCoverage(1.0f, 1.0f));
 	VNEAR(world.eyes[0].position, (XrVector3f{-0.031f, 1.5f, 0}));

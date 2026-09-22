@@ -11,7 +11,7 @@
 //   xrStereoExtent(view size, resolution tier)                                   visionEyeExtent() (+ render scale, ring limits)
 //   xrResolveCapturedView after XrGameBoot_Frame (P17 recovery)                  visionPresentationEnd()
 //   activeSurface / displayedSurface / surfaceRect / surfaceAspect               visionLayoutPanels()
-//   XrLayout::applyTabletopPreset (UI beside the board)                          visionUiBarSurface()
+//   XrLayout::applyTabletopPreset (UI beside the board; visionOS moves the bar)  visionUiBarSurface() / visionUiFarSurface()
 //
 // The engine facts (XrGameBoot_IsInteractiveGame, SplitReady, texture names ...) arrive as a plain struct so the very
 // same logic runs in the host tests, in the scripted fake engine and in the real engine (GXEngineHostEngine.cpp).
@@ -243,21 +243,31 @@ inline VisionEyeExtent visionBuildWorldFrame(XrWorldFrame &world, const VisionWo
 
 // Defaults (the readability audit is in docs/visionos-presentation.md section 5):
 //   * upright screen (menus, movies, loading): Quest relative[0], 1.35 m wide, 1.1 m ahead of the launch heading at eye level;
-//   * UI canvas (control bar + HUD) in tabletop mode: Quest applyTabletopPreset() expressed relative to the board: it stands behind
-//     the board's far edge and leans back 24 degrees toward the player; 1.60 m wide (the Quest's 1.8 m is for a 1.65 m board).
+//   * tabletop mode (visionOS layout, not the Quest preset): the CONTROL BAR lies in front of the board's near edge like a
+//     console, tilted 18 degrees up toward the player, 1.10 m wide; it is the part the player reads and pinches most, so it
+//     is the closest one and it never stands between the player and the map. The rest of the engine canvas (the HUD band
+//     with mission text, timers and messages, or the whole canvas while a dialog owns it) stands behind the far edge and
+//     leans back 24 degrees, as the Quest canvas does.
+//     The Quest preset (whole canvas behind the far edge) put an opaque bar across the back of the map; on Vision Pro that
+//     read as a wall above the battlefield.
 constexpr float kVisionScreenWidthM = 1.35f;
 constexpr float kVisionScreenAheadM = 1.10f;
 constexpr float kVisionScreenBelowHeadM = 0.02f;
-constexpr float kVisionUiCanvasWidthM = 1.60f;
+constexpr float kVisionUiCanvasWidthM = 1.60f;       // far canvas while a dialog owns it (menus must stay readable)
+constexpr float kVisionUiHudWidthM = 1.30f;          // far HUD band (mostly transparent: mission text, timers, messages)
 constexpr float kVisionUiLeanBackRad = 0.41887902f;  // 24 degrees, XrLayout tabletop preset
-constexpr float kVisionUiGapM = 0.10f;               // between the board's far edge and the bottom of the canvas
+constexpr float kVisionUiGapM = 0.10f;               // between the board's far edge and the bottom of the far canvas
 constexpr float kVisionUiLiftM = 0.03f;              // above the table plane
+constexpr float kVisionUiBarWidthM = 1.10f;          // near console (control bar)
+constexpr float kVisionUiBarTiltRad = 0.31415927f;   // 18 degrees up from the table toward the player (low: hides little map)
+constexpr float kVisionUiBarGapM = 0.09f;            // board near edge -> console top edge (clear of the 7 cm pan rim)
+constexpr float kVisionUiBarLiftM = 0.01f;           // console bottom edge above the table plane
 constexpr float kVisionLayerLiftM = 0.004f;          // marker quads stand this far in front of a panel
 
-// The surface the tabletop UI occupies, in the Quest's convention: the pose of the CENTER of the control bar band (XrLayout
-// relative[2] is "the detached UI"; displayedSurface() offsets the HUD piece from it). Placed behind the far edge of `board`,
-// canvas leaning back toward the player. `bar` is XrGameBoot_CommandRect().
-inline XrSurface visionUiBarSurface(const XrSurface &board, float boardAspect, float canvasAspect, XrGameRect bar,
+// A band of the engine canvas standing behind the far edge of `board`, leaning back toward the player: `band` (canvas UV,
+// y up from the bottom) is placed so the bottom edge of `bottomRef` sits `kVisionUiGapM` behind the far edge. Returns the
+// pose of the CENTER of `bottomRef` (the Quest convention; visionUiPieceSurface offsets other bands from it).
+inline XrSurface visionUiFarSurface(const XrSurface &board, float boardAspect, float canvasAspect, XrGameRect bottomRef,
 	float canvasWidth = kVisionUiCanvasWidthM)
 {
 	XrSurface ui;
@@ -267,11 +277,39 @@ inline XrSurface visionUiBarSurface(const XrSurface &board, float boardAspect, f
 	// Panel axes in board space (x right, y toward the far edge, z up): up vector leans away from the player.
 	ui.pose.orientation = xrNormalize(xrMul(board.pose.orientation, xrAxisAngle({1, 0, 0}, 1.57079633f - lean)));
 	const XrVector3f up = {0, std::sin(lean), std::cos(lean)};
-	const float barCenterUp = std::clamp(bar.h, 0.05f, 1.0f) * 0.5f * canvasAspect * canvasWidth;
+	const float centerUp = std::clamp(bottomRef.h, 0.05f, 1.0f) * 0.5f * canvasAspect * canvasWidth;
 	const XrVector3f localBottom = {0, boardHeight * 0.5f + kVisionUiGapM, kVisionUiLiftM};
-	const XrVector3f local = xrAdd(localBottom, xrScale(up, barCenterUp));
+	const XrVector3f local = xrAdd(localBottom, xrScale(up, centerUp));
 	ui.pose.position = xrAdd(board.pose.position, xrRotate(board.pose.orientation, local));
 	return ui;
+}
+
+// The control bar console in front of the near edge: its TOP edge (the side of the bar nearest the map) runs along the near
+// edge `kVisionUiBarGapM` out, and it tilts up toward the player by kVisionUiBarTiltRad. Returns the pose of the bar's center.
+// `bar` is XrGameBoot_CommandRect(). This is also the surface the workspace records (VisionPresentation::finish).
+inline XrSurface visionUiBarSurface(const XrSurface &board, float boardAspect, float canvasAspect, XrGameRect bar,
+	float barWidth = kVisionUiBarWidthM)
+{
+	XrSurface ui;
+	ui.width = barWidth;
+	const float boardHeight = board.width * boardAspect;
+	const float tilt = kVisionUiBarTiltRad;
+	// Rotating the board frame by `tilt` about X: panel up = (0, cos, sin) (toward the map and up), normal = (0, -sin, cos)
+	// (toward the player and up).
+	ui.pose.orientation = xrNormalize(xrMul(board.pose.orientation, xrAxisAngle({1, 0, 0}, tilt)));
+	const XrVector3f up = {0, std::cos(tilt), std::sin(tilt)};
+	const float barH = std::clamp(bar.h, 0.05f, 1.0f) * canvasAspect * barWidth;
+	const XrVector3f localBottom = {0, -(boardHeight * 0.5f + kVisionUiBarGapM + barH * std::cos(tilt)), kVisionUiBarLiftM};
+	const XrVector3f local = xrAdd(localBottom, xrScale(up, 0.5f * barH));
+	ui.pose.position = xrAdd(board.pose.position, xrRotate(board.pose.orientation, local));
+	return ui;
+}
+
+// How far the console reaches toward the player from the near edge (board-plane depth). The grab bar sits beyond it.
+inline float visionUiBarReachM(float canvasAspect, XrGameRect bar, float barWidth = kVisionUiBarWidthM)
+{
+	const float barH = std::clamp(bar.h, 0.05f, 1.0f) * canvasAspect * barWidth;
+	return kVisionUiBarGapM + barH * std::cos(kVisionUiBarTiltRad);
 }
 
 // XrHello::displayedSurface for the UI pieces: the piece's band is offset along the surface's local Y (xrUIBandOffset).
@@ -373,9 +411,10 @@ inline void visionAddQuad(VisionPanelPlan &plan, VisionPanelKind kind, int targe
 // never differ (docs/visionos-interaction.md section 9: "the pose given to visionMakePanel must be the pose of the layer").
 //
 //   Menu / Cinematic / Loading / Recovery : one upright screen panel showing the composed GAME target.
-//   Tabletop, stereo                      : the engine UI beside the board: piece 2 (control bar, or the whole canvas while a dialog is
-//                                           open) and piece 3 (the transparent HUD above the bar), both cropped from the UI target with
-//                                           the Quest rectangles (xrUIPieceRect) and stacked like XrHello::displayedSurface.
+//   Tabletop, stereo                      : the engine UI around the board, cropped from the UI target with the Quest rectangles
+//                                           (xrUIPieceRect): piece 2 = the control bar on the near console (visionUiBarSurface), or
+//                                           the whole canvas behind the far edge while a dialog is open; piece 3 = the transparent HUD
+//                                           band behind the far edge (visionUiFarSurface).
 //   Tabletop, planar world (no stereo)    : the WORLD target cropped to the tactical view, flat on the board, plus the same UI pieces.
 //   GroundView                            : no panels (the observer has the whole view; Quest hides the surfaces the same way).
 inline void visionLayoutPanels(const VisionLayoutInput &in, VisionPanelPlan &plan)
@@ -403,12 +442,15 @@ inline void visionLayoutPanels(const VisionLayoutInput &in, VisionPanelPlan &pla
 	}
 	if (!in.uiPanels) return;
 	const XrGameRect bar = in.commandRect;
-	const XrSurface barSurface = visionUiBarSurface(in.board, in.boardAspect, fullAspect, bar);
+	// Compact: the bar on the near console, the HUD band behind the far edge (its bottom edge where the far canvas starts).
+	// Expanded (a dialog owns the canvas): the whole canvas behind the far edge, where there is room for it.
 	static const char *const names[4] = {"", "", "ui-bar", "ui-hud"};
 	for (int piece = 2; piece <= 3; ++piece) {
 		const XrGameRect rect = xrUIPieceRect(piece, bar, in.expandedUI);
 		if (!(rect.w > 0.0f) || !(rect.h > 0.0f)) continue; // the HUD piece is empty while a dialog owns the canvas
-		const XrSurface surface = visionUiPieceSurface(barSurface, rect, bar, fullAspect);
+		XrSurface surface;
+		if (piece == 2 && !in.expandedUI) surface = visionUiBarSurface(in.board, in.boardAspect, fullAspect, bar);
+		else surface = visionUiFarSurface(in.board, in.boardAspect, fullAspect, rect, in.expandedUI ? kVisionUiCanvasWidthM : kVisionUiHudWidthM);
 		visionAddQuad(plan, piece == 2 ? kVisionPanelGameUI : kVisionPanelGameHud, GX_XRT_UI, names[piece], surface,
 			fullAspect * rect.h / rect.w, rect, true);
 	}

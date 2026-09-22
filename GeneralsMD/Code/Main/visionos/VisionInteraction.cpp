@@ -714,8 +714,10 @@ VisionInteraction::Target VisionInteraction::classify(const Ptr &p, uint32_t are
 			{(u - 0.5f) * panel.surface.width, (v - 0.5f) * panel.surface.width * panel.aspect, 0}));
 		const float dist = xrLength(xrSub(point, panelOrigin));
 		int control = -1;
-		if (panel.kind == kVisionPanelGameHud) {
-			// The unframed HUD's empty space must not become an invisible input wall.
+		if (panel.kind == kVisionPanelGameHud || (panel.kind == kVisionPanelGameUI && !host_.engine.expandedUI)) {
+			// The unframed HUD's empty space must not become an invisible input wall. The same holds for the control-bar
+			// console in front of the near edge: its see-through top rows overlap the near part of the map in view, and a
+			// pinch there must reach the map. (A dialog canvas keeps catching every pinch, as on Quest.)
 			const float px = (panel.rect.x + u * panel.rect.w) * float(host_.engine.gameWidth - 1);
 			const float py = (1 - panel.rect.y - v * panel.rect.h) * float(host_.engine.gameHeight - 1);
 			if (!bridge_ || !bridge_->HasUIAt(px, py)) continue;

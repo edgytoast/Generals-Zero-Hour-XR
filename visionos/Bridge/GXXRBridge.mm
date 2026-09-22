@@ -64,7 +64,7 @@ namespace {
 constexpr float kBoardHalfX = 0.5f;
 constexpr float kBoardHalfZ = 0.3f;
 constexpr float kBoardHeight = 0.8f;
-constexpr float kBoardDistance = 0.9f;
+constexpr float kBoardDistance = 1.0f;  // same as VisionInteractionConfig::initialDistanceM
 // Head height used when ARKit gives no device anchor (e.g. some simulator states).
 constexpr float kFallbackHeadHeight = 1.5f;
 // Frames to wait for a tracked anchor before placing the board with the fallback pose.
@@ -687,11 +687,12 @@ static void GXXRDebugDumpTexture(id<MTLCommandBuffer> cb, id<MTLTexture> tex, NS
         const simd_float3 head = simd_make_float3(worldFromDevice.columns[3].x, 0.0f, worldFromDevice.columns[3].z);
         // Device (world origin on the floor): head is ~1.0-2.3 m up, so the surface sits 0.8 m above the origin.
         // Simulator (origin at head height, narrow 90 x 59 degree view): head Y is ~0, so put the board
-        // 0.45 m below the eyes and 1.25 m ahead so all of it fits in the vertical field of view.
+        // 0.35 m below the eyes and 1.45 m ahead so the board, the control-bar console in front of it and the HUD band
+        // behind it all fit in the vertical field of view (same numbers as VisionInteractionConfig::headRelative*).
         const float headY = worldFromDevice.columns[3].y;
         const bool floorOrigin = headY > 1.0f && headY < 2.3f;
-        const float surfaceY = floorOrigin ? kBoardHeight : headY - 0.45f;
-        const simd_float3 center = head + fwd * (floorOrigin ? kBoardDistance : 1.25f);
+        const float surfaceY = floorOrigin ? kBoardHeight : headY - 0.35f;
+        const simd_float3 center = head + fwd * (floorOrigin ? kBoardDistance : 1.45f);
         wfb.columns[3] = simd_make_float4(center.x, surfaceY, center.z, 1.0f);
         {
             std::lock_guard<std::mutex> lock(sh.mutex);
