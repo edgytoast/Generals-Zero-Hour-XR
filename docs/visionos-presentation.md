@@ -195,10 +195,18 @@ listener every frame, before the engine's own audio update, following `docs/visi
 Exit returns to the unchanged tabletop: `VisionPresentationLogic.h`'s mode resolution simply stops selecting
 `GroundView` once `observerActive` goes false (no separate "exit" transition to get wrong).
 
-**Verified**: the arithmetic (host tests, `vision-presentation-test.cpp`) and that the call sites compile inside
-`GX_XR_BeginStereoWorld()` guarded by `GX_PLATFORM_VISIONOS`. **Not verified**: actually hearing spatial audio move
-as Ground View is entered — that needs a booted engine with audio and a headset/simulator audio route, neither
-available in this session.
+`GXHostFrameOutput.groundView` (documented since an earlier wave as "the compositor clears to opaque black behind
+them, no passthrough") was not actually wired into the compositor before this session — `GXXRBridge.mm`'s
+`encodeEngineFrame` never read it, so an eye viewport with nothing to draw fell through to the normal alpha-0
+(passthrough) clear regardless of mode. Fixed this session: `GXXRMetalRenderer.encodeClearInto:...:opaqueBlack:`
+takes an explicit flag now, and the engine-mode branch passes `out.groundView`. Confirmed live in the simulator
+(section 10): the ground-view phase screenshot shows solid black behind the launcher window and UI panel, where the
+earlier build still showed the simulator's mock room through it.
+
+**Verified**: the arithmetic (host tests, `vision-presentation-test.cpp`); that the call sites compile inside
+`GX_XR_BeginStereoWorld()` guarded by `GX_PLATFORM_VISIONOS`; the opaque-black clear, live in the simulator (section
+10, `final-ground-view.png`). **Not verified**: actually hearing spatial audio move as Ground View is entered — that
+needs a booted engine with audio and a headset/simulator audio route, neither available in this session.
 
 ## 8. Text input bridge (mission item 6)
 
@@ -287,12 +295,23 @@ PASS 109 vision bridge forwarding checks (0 failed)
 existing Quest host tests: 27 passed, 0 failed (of 27 run)
 ```
 
-Both commands, and their exact output, were run this session (dates/commands in the package report).
+Both commands, and their exact output, were run this session.
 
-**Simulator run** — see the "not verified" note in section 11: whether the scripted run and its screenshots were
-actually captured in the simulator this session is recorded in the package's structured report
-(`verifiedWithEvidence` vs `notVerified`), not claimed here; do not treat this document as evidence of a simulator
-run on its own.
+**Simulator run**: built and ran in a dedicated `GXR-c2-presentation` simulator device
+(`xcrun simctl launch --console-pty ... -autoImmersive -fakeEngineScript -fakeEngineScriptLoading 6
+-fakeEngineScriptMenu 6 -fakeEngineScriptTabletop 14 -fakeEngineScriptGround 14`), screenshots of all four phases
+captured (`xcrun simctl io <udid> screenshot`) and looked at (the `Read` tool on each PNG, not just file existence):
+`loading` and `menu` show the upright UI-panel test pattern with no stereo board (as designed); `tabletop` shows the
+stereo board with the synthesized box-select rectangle (tint + outline), cursor and waypoint marker all visible;
+`ground-view` shows solid black behind the launcher window and UI panel (no passthrough). The engine-host log for
+the same run: `loading burst: 15 nested frames presented over 1.5 s (0 lost slot)` (section 6's nested-present
+protocol) and `entering phase 'loading'/'menu'/'tabletop'/'ground-view'` for every transition, confirming the cycle
+runs as scripted. Two real bugs were found and fixed by this same process (not merely "ran without crashing"):
+the feedback markers were being almost entirely depth-culled against the board's flat composited picture (section
+5), and `GXHostFrameOutput.groundView` was never wired to the opaque-black clear it was documented to drive
+(section 7) — both fixed and re-verified with fresh screenshots before being called done here. This document
+records what the doc author observed directly; the package's structured report is the source of truth for exactly
+which claims are backed by evidence from this session (`verifiedWithEvidence`) versus not (`notVerified`).
 
 ## 11. What is unverified
 
