@@ -108,6 +108,14 @@ void GXEngineHost_Pause(GXEngineHostPauseReason reason, bool paused);
 bool GXEngineHost_Post(void (^work)(void));
 #endif
 
+/* Per-frame engine-thread hook (package F, the native SwiftUI panels). Called ON THE ENGINE THREAD once per loop iteration,
+ * right after the posted work ran and before the pause / head checks and the engine frame: also while the engine is parked
+ * or waiting for the compositor (about 20 Hz then), so the panels stay live and posted actions take effect at once.
+ * Only called after the boot succeeded. `realEngine` is false for the fake client (there is no engine state to read).
+ * The hook must be quick (it runs inside the frame budget) and must not block. Pass NULL to remove it. Thread safe. */
+typedef void (*GXEngineFrameHook)(void* user, bool realEngine);
+void GXEngineHost_SetFrameHook(GXEngineFrameHook hook, void* user);
+
 /* The engine log file (the path the launcher shows). Valid after GXEngineHost_BeginLogging or Start. */
 const char* GXEngineHost_LogPath(void);
 

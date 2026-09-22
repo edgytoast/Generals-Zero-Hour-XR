@@ -54,6 +54,8 @@ struct Host {
     std::atomic<bool> stop{false};
     std::atomic<uint32_t> pauseMask{0};
     std::atomic<bool> waitingForCompositor{false};
+    std::atomic<GXEngineFrameHook> frameHook{nullptr};  // GXEngineHost_SetFrameHook (package F panels)
+    std::atomic<void*> frameHookUser{nullptr};
     std::deque<void (^)(void)> posted;
 
     // status (guarded by mutex)
@@ -240,6 +242,7 @@ void EngineThread() {
     while (!h.stop.load() && !leaveLoop) {
         @autoreleasepool {  // per-iteration pool: ObjC temporaries of the services / mailbox must not pile up for hours
             RunPosted(h);
+            if (GXEngineFrameHook hook = h.frameHook.load()) hook(h.frameHookUser.load(), h.useRealEngine);
             const uint32_t mask = h.pauseMask.load();
             if (mask != 0) {
                 if (!parked) {
@@ -521,6 +524,12 @@ void GXEngineHost_Pause(GXEngineHostPauseReason reason, bool paused) {
     if (paused) h.pauseMask.fetch_or((uint32_t)reason);
     else h.pauseMask.fetch_and(~(uint32_t)reason);
     if (h.pauseMask.load() != before) h.cv.notify_all();
+}
+
+void GXEngineHost_SetFrameHook(GXEngineFrameHook hook, void* user) {
+    Host& h = H();
+    h.frameHookUser.store(user);
+    h.frameHook.store(hook);
 }
 
 bool GXEngineHost_Post(void (^work)(void)) {

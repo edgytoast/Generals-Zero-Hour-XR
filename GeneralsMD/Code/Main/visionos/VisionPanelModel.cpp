@@ -26,6 +26,7 @@ namespace {
 const XrTranslation kExtraTranslations[] = {
 	{"Im Dialog oder bei gesperrter Kamera nicht verfügbar", "Unavailable in a dialog or while camera is locked"},
 	{"Keine Auswahl", "No selection"},
+	{"Beispieleinheit", "Sample unit"},
 };
 
 const char *lookup(const char *german, int language)
