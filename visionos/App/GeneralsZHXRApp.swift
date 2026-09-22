@@ -37,12 +37,25 @@ struct GeneralsZHXRApp: App {
         // positions a NEW window relative to a window that is already open (`WindowPlacement.Position.trailing / leading /
         // below(WindowProxy)`, found through `context.windows`); the system picks the depth and height, and an app cannot give a
         // window an absolute position in a Full Space. When the reference window is closed the system default placement applies.
+        // The tabletop controls strip: the one small window that stays open during a match (TabletopControlsWindow.swift).
+        WindowGroup(id: TabletopControlsWindow.id) {
+            TabletopControlsWindow(model: model, store: panelStore)
+                .environment(model)
+                .environment(panelStore)
+        }
+        .windowResizability(.contentSize)
+        .defaultWindowPlacement { content, context in
+            let size = content.sizeThatFits(.unspecified)
+            if let launcher = context.windows.first(where: { $0.id == "launcher" }) { return WindowPlacement(.trailing(launcher), size: size) }
+            return WindowPlacement(.utilityPanel, size: size)
+        }
+
         WindowGroup(id: CommandsWindow.id) {
             CommandsWindow(appModel: model, store: panelStore)
                 .environment(model)
                 .environment(panelStore)
         }
-        .defaultSize(width: 740, height: 1000)
+        .defaultSize(width: 580, height: 760)
         .defaultWindowPlacement { content, context in
             let size = content.sizeThatFits(.unspecified)
             if let launcher = context.windows.first(where: { $0.id == "launcher" }) { return WindowPlacement(.trailing(launcher), size: size) }

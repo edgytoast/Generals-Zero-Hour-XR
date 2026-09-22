@@ -39,17 +39,20 @@ struct UIWindowsCoordinator: ViewModifier {
             .onChange(of: model.spaceState) { _, state in
                 switch state {
                 case .open:
-                    openWindow(id: CommandsWindow.id)
+                    // The small controls strip, not the big Commands window (it opens from the strip's Windows menu).
+                    openWindow(id: TabletopControlsWindow.id)
                     // The launcher is about a metre tall and stands between the player and the board. With a real game it
-                    // steps aside; the Commands window reopens it (Windows > Open Launcher, and Leave Tabletop). The short
-                    // wait lets the Commands window be placed beside the launcher first.
+                    // steps aside; the controls strip reopens it (Windows > Open Launcher, and Leave Tabletop). The short
+                    // wait lets the strip be placed beside the launcher first.
                     if model.hidesLauncherOnTabletop {
                         Task { @MainActor in
                             try? await Task.sleep(for: .milliseconds(800))
                             if model.spaceState == .open { dismissWindow(id: "launcher") }
                         }
                     }
-                case .closed: dismissWindow(id: CommandsWindow.id)
+                case .closed:
+                    dismissWindow(id: CommandsWindow.id)
+                    dismissWindow(id: TabletopControlsWindow.id)
                 default: break
                 }
             }

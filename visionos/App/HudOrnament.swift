@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The toolbar under the launcher and the Commands window: Ground View, Recenter, Pause, Menu and Leave Tabletop. They are the
+/// The toolbar under the launcher and the Commands window, and the body of the tabletop controls strip: Ground View, Recenter, Pause, Menu and Leave Tabletop. They are the
 /// actions a player needs at arm's reach while the immersive space is open; each maps to an existing command
 /// (InteractionControls / GXEngineHost / dismissImmersiveSpace), none re-implements a rule.
 ///
@@ -10,7 +10,7 @@ import SwiftUI
 /// simulator: "No Observable object of type AppModel found", `TransformOrnament.updateValue` in the crash trace) even
 /// though the ancestor view carries `.environment(model)`; passing the values explicitly sidesteps the SDK issue.
 struct HudOrnament: View {
-    enum Location { case launcher, commands }
+    enum Location { case launcher, commands, controls }
     let location: Location
     let model: AppModel
     let store: PanelStore

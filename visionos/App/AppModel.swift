@@ -31,6 +31,21 @@ final class AppModel {
     /// about a metre tall and stood between the player and the board), and the other windows reopen it from this flag.
     var launcherOpen = false
     @ObservationIgnored var bootstrapped = false
+    /// Set between "a window asked to reopen the launcher" and the launcher appearing, so two windows reacting to the same
+    /// tabletop close cannot open two launchers.
+    @ObservationIgnored private var launcherReopenPending = false
+
+    /// True when the caller should call `openWindow(id: "launcher")`: the launcher is closed and nobody else asked yet.
+    func claimLauncherReopen() -> Bool {
+        if launcherOpen || launcherReopenPending { return false }
+        launcherReopenPending = true
+        return true
+    }
+
+    func launcherDidAppear() {
+        launcherOpen = true
+        launcherReopenPending = false
+    }
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     @ObservationIgnored private var memoryWarningObserver: NSObjectProtocol?
 

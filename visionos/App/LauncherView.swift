@@ -77,7 +77,7 @@ struct LauncherView: View {
                       allowsMultipleSelection: false) { result in
             model.handlePickerResult(result)
         }
-        .onAppear { model.launcherOpen = true }
+        .onAppear { model.launcherDidAppear() }
         .onDisappear { model.launcherOpen = false }
         .task {
             // Once per app run: the launcher can close and reopen, the start-up must not repeat. Status polling and the
