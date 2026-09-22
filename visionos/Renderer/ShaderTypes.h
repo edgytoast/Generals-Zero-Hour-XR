@@ -45,10 +45,26 @@ typedef struct {
     float pad0, pad1;
 } GXXRLayerUniforms;
 
+// Flat-color world geometry (box outline/fill, grab bar, markers): position + straight RGBA, alpha blended, no texture.
+typedef struct {
+    float position[3];
+    float color[4];
+} GXXRFlatVertex;
+
+typedef struct {
+    simd_float4x4 clipFromWorld;
+} GXXRFlatUniforms;
+
+// Full-view comfort fade veil: a flat color over the whole drawable, ignoring clipFromWorld (head/screen locked).
+typedef struct {
+    simd_float4 color; // straight RGBA; alpha 0 draws nothing
+} GXXRFadeParams;
+
 enum {
     GXXRBufferIndexVertices = 0,
     GXXRBufferIndexUniforms = 1,
     GXXRBufferIndexCompositeParams = 0,
+    GXXRBufferIndexFadeParams = 0,
 };
 
 #endif  // GXXR_SHADER_TYPES_H

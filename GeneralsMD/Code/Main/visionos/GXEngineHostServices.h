@@ -214,6 +214,10 @@ bool GXEngineHost_StartClient(const GXEngineClient* client);
 
 /* Status text setters for clients (engine thread). */
 void GXEngineHost_SetProgress(const char* text);
+/* Presentation status for GXEngineHostStatus (engine thread, once per frame): mode name ("tabletop" ...), stereo eye target size (0 = none), UI size. */
+void GXEngineHost_SetPresentationStatus(const char* modeName, int eyeWidth, int eyeHeight, int uiWidth, int uiHeight);
+/* Text entry state for GXEngineHostStatus / GXEngineHost_TextFieldFocused (engine thread, once per frame). */
+void GXEngineHost_SetTextFieldState(bool focused, const char* utf8Text);
 
 #ifdef __cplusplus
 }

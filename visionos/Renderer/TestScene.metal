@@ -144,3 +144,44 @@ fragment float4 layer_fragment(LayerOut in [[stage_in]],
     if (c.a < 1e-3) discard_fragment();  // keep depth for translucent-but-visible pixels only
     return c;
 }
+
+// --- Flat-color world geometry: box outline/fill, grab bar, markers ---------------------
+
+struct FlatOut {
+    float4 position [[position]];
+    float4 color;
+};
+
+vertex FlatOut flat_vertex(uint vid [[vertex_id]],
+                            const device GXXRFlatVertex* verts [[buffer(GXXRBufferIndexVertices)]],
+                            constant GXXRFlatUniforms& u [[buffer(GXXRBufferIndexUniforms)]]) {
+    const device GXXRFlatVertex& v = verts[vid];
+    FlatOut out;
+    out.position = u.clipFromWorld * float4(v.position[0], v.position[1], v.position[2], 1.0);
+    out.color = float4(v.color[0], v.color[1], v.color[2], v.color[3]);
+    return out;
+}
+
+fragment float4 flat_fragment(FlatOut in [[stage_in]]) {
+    float3 rgb = srgbToLinear(in.color.rgb);
+    float a = in.color.a;
+    return float4(rgb * a, a); // premultiplied for the mixed-immersion blend
+}
+
+// --- Full-view comfort fade veil: fullscreen triangle, ignores clipFromWorld -------------
+
+vertex CompositeOut fade_vertex(uint vid [[vertex_id]]) {
+    float2 p = float2((vid << 1) & 2, vid & 2);
+    CompositeOut out;
+    out.position = float4(p * 2.0 - 1.0, 0.0, 1.0);
+    out.uv = float2(0, 0);
+    return out;
+}
+
+fragment float4 fade_fragment(CompositeOut in [[stage_in]],
+                              constant GXXRFadeParams& p [[buffer(GXXRBufferIndexFadeParams)]]) {
+    (void)in;
+    if (p.color.a < 1e-4) discard_fragment();
+    float3 rgb = srgbToLinear(p.color.rgb);
+    return float4(rgb * p.color.a, p.color.a);
+}

@@ -58,4 +58,5 @@ inline void gxUIResolutionSize(int32_t uiResolution, int &width, int &height)
 // Returns true when the applied settings changed. Both out pointers are optional.
 bool GXGraphicsSettings_ConsumeForEngine(GXGraphicsSettings *applied, uint32_t *generation);
 GXGraphicsSettings GXGraphicsSettings_Requested();
+uint32_t GXGraphicsSettings_AppliedGeneration();
 void GXGraphicsSettings_ResetForTest();

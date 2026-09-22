@@ -40,6 +40,7 @@
 #include "XRPresentation.h"
 
 #import "GXXREngineSession.h"
+#import "GXXRFeedbackRenderer.h"
 #import "GXXRFrameMailbox.h"
 #import "GXXRMetalRenderer.h"
 #import "GXXRStatusPanel.h"
@@ -271,6 +272,7 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
     id<MTLDevice> _device;
     id<MTLCommandQueue> _queue;
     GXXRMetalRenderer* _renderer;
+    GXXRFeedbackRenderer* _feedbackRenderer;  // box-select rect, grab bar, cursor, placement/ground reticles, comfort fade
     GXXRTestScene* _testScene;
 
     // Engine mode (engine thread + decoupled compositor). Metal side only: no GL on this thread, ever.
@@ -341,6 +343,9 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
         SetMessage("Metal renderer init failed (see log)");
         return NO;
     }
+    // Non-fatal: the interaction feedback (box-select, grab bar, placement/ground markers, comfort fade) is supplementary;
+    // its own init logs the reason and a nil renderer just means those markers are skipped this run.
+    _feedbackRenderer = [[GXXRFeedbackRenderer alloc] initWithDevice:_device colorFormat:_colorFormat depthFormat:_depthFormat];
     const bool external = Sh().optExternalEyeTextures.load();
     _testScene = [[GXXRTestScene alloc] initWithRenderer:_renderer externalEyeTextures:external];
     _statusPanel = [[GXXRStatusPanel alloc] initWithDevice:_device];
@@ -850,6 +855,16 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
             [layers addObject:layer];
         }
 
+        // World pose of every published layer, indexed exactly like out.layers (GXHostFeedback.pointerLayer indexes into
+        // out.layers, not the filtered `layers` array above, which can skip an entry whose texture was not found this frame).
+        NSMutableArray<NSValue*>* layerPoses = [NSMutableArray arrayWithCapacity:out.layerCount];
+        for (uint32_t i = 0; i < out.layerCount && i < GX_HOST_MAX_LAYERS; ++i) {
+            const GXHostLayer& l = out.layers[i];
+            simd_float4x4 m = simd_matrix4x4(simd_quaternion(l.orientation[0], l.orientation[1], l.orientation[2], l.orientation[3]));
+            m.columns[3] = simd_make_float4(l.position[0], l.position[1], l.position[2], 1.0f);
+            [layerPoses addObject:[NSValue value:&m withObjCType:@encode(simd_float4x4)]];
+        }
+
         float wfb[16];
         float hx = 0, hz = 0;
         const bool hasBoard = XRPresentation_GetTabletopPlacement(wfb, &hx, &hz);
@@ -891,6 +906,20 @@ bool GXXRBridgeGetGameDataInfo(char* outPath, uint32_t capacity, bool* outLooksP
                 simd_float4x4 clipFromWorld;
                 memcpy(&clipFromWorld, pe.clip_from_world, sizeof(clipFromWorld));
                 [_renderer encodeLayers:layers into:cb color:colorTex colorSlice:e.array_slice depth:depthTex viewport:vp clipFromWorld:clipFromWorld];
+                drewAnything = true;
+            }
+            if (_feedbackRenderer && out.feedback.flags != 0) {
+                // Same rendered-eye clip as the layers above: box rect, grab bar, cursor and the other world markers must
+                // land on the board exactly where the layers do, and ride the same reprojection.
+                simd_float4x4 clipFromWorld;
+                memcpy(&clipFromWorld, pe.clip_from_world, sizeof(clipFromWorld));
+                [_feedbackRenderer encodeMarkersInto:cb color:colorTex colorSlice:e.array_slice depth:depthTex viewport:vp
+                                        clipFromWorld:clipFromWorld feedback:&out.feedback layerPoses:layerPoses];
+                drewAnything = true;
+            }
+            if (_feedbackRenderer && out.feedback.fadeAlpha > 0.001f) {
+                // Head/screen locked: drawn with THIS drawable's own viewport, not the rendered-eye clip.
+                [_feedbackRenderer encodeFadeInto:cb color:colorTex colorSlice:e.array_slice viewport:vp alpha:out.feedback.fadeAlpha];
                 drewAnything = true;
             }
         }

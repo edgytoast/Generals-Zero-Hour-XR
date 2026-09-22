@@ -102,6 +102,9 @@
 #include "GeneratedVersion.h"
 #include "d3d8gles.h"
 #if defined(GX_PLATFORM_VISIONOS)
+#include "../../../visionos/Audio/GXAudioListener.h"
+#endif
+#if defined(GX_PLATFORM_VISIONOS)
 #include "Common/AudioAffect.h"
 #include "Common/GameAudio.h"
 #include "GameNetwork/NetworkInterface.h"
@@ -428,6 +431,28 @@ static void xrFramePolicyEndOfInit()
 {
 	xrApplyLogicDefault();
 	xrApplyRenderDefault();
+}
+
+void XrGameBoot_SetRenderFpsCap(int fps)
+{
+	if (TheFramePacer == nullptr) {
+		return;
+	}
+	if (fps <= 0) {
+		// Uncapped: the limiter is off, the guard no longer enforces a render window (the logic time scale still holds the simulation at logicHz).
+		s_policy.flags &= ~XRBOOT_POLICY_RENDER_CAP;
+		s_policy.renderCap = 0;
+		TheFramePacer->enableFramesPerSecondLimit(FALSE);
+		if (TheGlobalData != nullptr) {
+			TheWritableGlobalData->m_useFpsLimit = FALSE;
+		}
+		GXLOG("graphics: render limiter off (uncapped)");
+		return;
+	}
+	s_policy.flags |= XRBOOT_POLICY_RENDER_CAP;
+	s_policy.renderCap = fps;
+	xrApplyRenderDefault();
+	GXLOG("graphics: render limiter %d fps", fps);
 }
 
 // Once per engine frame, before executeSingleFrame().
@@ -894,6 +919,25 @@ void GX_XR_PresentLoadingFrame() {
 	if(GX_XR_OffscreenBoot && s_loadingPresenter)s_loadingPresenter(s_loadingContext);
 }
 
+#if defined(GX_PLATFORM_VISIONOS)
+static bool s_shadowDecals = true; // XrGameBoot_SetShadowMode (engine thread)
+void XrGameBoot_SetShadowMode(int mode)
+{
+	s_shadowDecals = mode != 0;
+	GXLOG("graphics: shadows %s", mode == 0 ? "off" : mode == 1 ? "decals" : "volumes + decals");
+}
+bool XrGameBoot_TextFieldFocused(std::string *currentText)
+{
+	auto *engine = dynamic_cast<SDL3GameEngine *>(TheGameEngine);
+	return s_booted && engine != nullptr && engine->xrTextEntryFocused(currentText) == TRUE;
+}
+bool XrGameBoot_TextInput(const char *utf8, int backspaces, bool enter)
+{
+	auto *engine = dynamic_cast<SDL3GameEngine *>(TheGameEngine);
+	return s_booted && engine != nullptr && engine->xrInjectText(utf8, backspaces, enter ? TRUE : FALSE) == TRUE;
+}
+#endif
+
 Bool XrGameBoot_Frame()
 {
 	if (!s_booted || TheGameEngine == nullptr) {
@@ -913,7 +957,13 @@ Bool XrGameBoot_Frame()
 		// GeneralsX @performance Codex 14/09/2026 Keep resources for instant A/B,
 		// but skip volume update/render in B. Existing decal shadows are retained;
 		// this does not invent replacement shadows for volume-only templates.
-		if(GX_XR_WorldRequested()) {TheWritableGlobalData->m_useShadowVolumes=s_worldFrame.volumeShadows;TheWritableGlobalData->m_useShadowDecals=TRUE;TheWritableGlobalData->m_enableBehindBuildingMarkers=FALSE;}
+		if(GX_XR_WorldRequested()) {TheWritableGlobalData->m_useShadowVolumes=s_worldFrame.volumeShadows;
+#if defined(GX_PLATFORM_VISIONOS)
+			TheWritableGlobalData->m_useShadowDecals=s_shadowDecals; // package C2: the "shadows off" graphics setting
+#else
+			TheWritableGlobalData->m_useShadowDecals=TRUE;
+#endif
+			TheWritableGlobalData->m_enableBehindBuildingMarkers=FALSE;}
 #if defined(GX_PLATFORM_VISIONOS)
 		xrFramePolicyGuard();
 #endif
@@ -1152,6 +1202,24 @@ void GX_XR_BeginStereoWorld() {
 		camera[col*4]=unit.x;camera[col*4+1]=unit.y;camera[col*4+2]=unit.z;
 	}
 	camera[12]=position.x;camera[13]=position.y;camera[14]=position.z;
+#if defined(GX_PLATFORM_VISIONOS)
+	// docs/visionos-audio.md section 4.1: the listener follows the head (engine thread, once per frame, before the engine frame's audio update).
+	// Tabletop: head in board space (metres) + metres per game unit; Ground View: head in game units, one unit = 1/10 m.
+	if(s_worldFrame.observer) {
+		const float pos[3]={position.x,position.y,position.z},fwd[3]={-camera[8],-camera[9],-camera[10]},up[3]={camera[4],camera[5],camera[6]};
+		GXAudio_SetListenerPoseWorld(1.0f/kXrObserverUnitsPerMetre,pos,fwd,up);
+	} else {
+		const float axisLength=std::max(1e-6f,std::sqrt(board[0]*board[0]+board[4]*board[4]));
+		const float centre[3]={center.x,center.y,center.z};
+		GXAudio_SetBoardFrame(centre,board[0]/axisLength,board[4]/axisLength);
+		const XrPosef inverse=xrPoseInverse(s_worldFrame.board.pose);
+		const auto headBoard=xrAdd(inverse.position,xrRotate(inverse.orientation,head));
+		const auto forward=xrRotate(inverse.orientation,xrRotate(s_worldFrame.eyes[0].orientation,{0,0,-1}));
+		const auto upward=xrRotate(inverse.orientation,xrRotate(s_worldFrame.eyes[0].orientation,{0,1,0}));
+		const float hb[3]={headBoard.x,headBoard.y,headBoard.z},fb[3]={forward.x,forward.y,forward.z},ub[3]={upward.x,upward.y,upward.z};
+		GXAudio_SetListenerPose(s_worldFrame.board.width/s_worldSpan,hb,fb,ub);
+	}
+#endif
 	if(!s_renderCamera) s_renderCamera=new CameraClass;
 	Matrix3D pose(1);for(int row=0;row<3;++row) for(int col=0;col<4;++col) pose[row][col]=camera[col*4+row];
 	s_renderCamera->Set_Transform(pose);

@@ -93,6 +93,8 @@ typedef struct GXEngineHostStatus {
     int32_t stereoEyeHeight;
     int32_t uiWidth, uiHeight;  /* engine backbuffer / UI target size (the boot-time UI resolution) */
     uint32_t graphicsApplied;   /* generation of the GXGraphicsSettings the engine thread has applied (see GXEngineHost_GetGraphics) */
+    bool textFieldFocused;      /* a game text entry gadget owns the focus: show the system text field (docs/visionos-presentation.md section 9) */
+    char textFieldText[192];    /* its current content, UTF-8 (truncated) */
 } GXEngineHostStatus;
 
 /* Starts the REAL engine. Non-blocking: spawns the engine thread, which creates the ANGLE context, boots the
@@ -191,6 +193,20 @@ void GXEngineHost_SanitizeGraphics(GXGraphicsSettings* settings);
  * stores that line in its own preferences; ParseGraphics returns false for an unusable line and leaves `out` unchanged. */
 size_t GXEngineHost_FormatGraphics(const GXGraphicsSettings* settings, char* out, size_t capacity);
 bool GXEngineHost_ParseGraphics(const char* line, GXGraphicsSettings* out);
+
+/* ------------------------------------------------------------------------------------------------------------------
+ * Text input (package C2). The engine has no window and the headset no hardware keyboard, so a game text entry (chat, save game name, lobby name)
+ * cannot be typed into directly. While the engine reports GXEngineHostStatus.textFieldFocused, the app shows a system text field
+ * (visionos/App/TextInputBridge.swift) and sends what the player typed with GXEngineHost_SubmitText.
+ * ------------------------------------------------------------------------------------------------------------------ */
+
+/* Thread safe snapshot (refreshed by the engine thread every frame). Copies the current content (UTF-8) when `currentText` is non-NULL. */
+bool GXEngineHost_TextFieldFocused(char* currentText, size_t capacity);
+
+/* Queues `utf8` for the focused text entry: on the engine thread, before the next engine frame, the existing content is erased first when
+ * `replaceExisting` (one Backspace per character) and `pressEnter` sends Enter afterwards (chat: sends the line). Returns false when the engine is not
+ * running. When no text entry is focused any more the text is dropped. */
+bool GXEngineHost_SubmitText(const char* utf8, bool replaceExisting, bool pressEnter);
 
 /* The engine log file (the path the launcher shows). Valid after GXEngineHost_BeginLogging or Start. */
 const char* GXEngineHost_LogPath(void);

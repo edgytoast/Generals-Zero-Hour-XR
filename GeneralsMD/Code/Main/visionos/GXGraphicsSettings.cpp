@@ -169,6 +169,13 @@ bool GXGraphicsSettings_ConsumeForEngine(GXGraphicsSettings *applied, uint32_t *
 	return changed;
 }
 
+uint32_t GXGraphicsSettings_AppliedGeneration()
+{
+	std::lock_guard<std::mutex> lock(g_lock);
+	ensureInit();
+	return g_appliedGeneration;
+}
+
 GXGraphicsSettings GXGraphicsSettings_Requested()
 {
 	std::lock_guard<std::mutex> lock(g_lock);

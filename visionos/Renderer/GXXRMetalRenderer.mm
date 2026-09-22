@@ -25,6 +25,7 @@ using gxxr::Range;
     l.orientation = orientation;
     l.sizeMeters = sizeMeters;
     l.flipY = flipY;
+    l.uvRect = simd_make_float4(0, 0, 1, 1);
     l.premultipliedAlpha = YES;
     l.gammaEncoded = ![GXXRMetalRenderer isSRGBFormat:texture.pixelFormat];
     return l;
@@ -324,7 +325,7 @@ using gxxr::Range;
         GXXRCompositeParams p = {};
         p.flags = (layer.flipY ? GXXR_COMPOSITE_FLIP_Y : 0u) | (layer.premultipliedAlpha ? 0u : GXXR_COMPOSITE_PREMULTIPLY) |
                   (layer.gammaEncoded ? GXXR_COMPOSITE_SRGB_DECODE : 0u);
-        p.uvRect = simd_make_float4(0, 0, 1, 1);
+        p.uvRect = layer.uvRect;
         [enc setVertexBytes:&u length:sizeof(u) atIndex:GXXRBufferIndexUniforms];
         [enc setFragmentBytes:&p length:sizeof(p) atIndex:GXXRBufferIndexCompositeParams];
         [enc setFragmentTexture:layer.texture atIndex:0];

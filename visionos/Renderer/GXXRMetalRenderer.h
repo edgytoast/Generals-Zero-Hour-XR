@@ -24,6 +24,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) simd_quatf orientation;
 @property(nonatomic) simd_float2 sizeMeters;
 @property(nonatomic) BOOL flipY;
+/// Crop of the source texture shown on the quad: x,y origin and w,h size in [0,1] (GL bottom-up UVs before flipY). Default the whole texture.
+@property(nonatomic) simd_float4 uvRect;
 /// Source alpha is premultiplied (default YES: the engine writes premultiplied coverage).
 @property(nonatomic) BOOL premultipliedAlpha;
 /// Source RGB is gamma (sRGB) encoded in a non-sRGB pixel format (default: derived from the texture's

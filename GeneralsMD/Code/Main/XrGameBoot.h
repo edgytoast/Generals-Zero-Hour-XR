@@ -134,6 +134,18 @@ void XrGameBoot_SetHostPaused(bool paused);
 // last call, logged by the host every 10 s. Returns false until a window of at least `minSeconds` elapsed.
 struct XrLogicRate { double logicHz = 0, engineFps = 0, seconds = 0; unsigned logicFrames = 0, engineFrames = 0; bool inGame = false; };
 bool XrGameBoot_SampleLogicRate(XrLogicRate &out, double minSeconds);
+// ---- package C2 (presentation and world); engine thread only ----
+// Render frame cap of the engine: fps > 0 keeps the limiter on at that rate (inside the frame policy envelope), fps <= 0 switches the limiter off
+// (the simulation still runs at the policy's logic rate). Applied at once.
+void XrGameBoot_SetRenderFpsCap(int fps);
+// Dynamic shadows while the stereo world is drawn: 0 off, 1 decals only (the Quest default: volumes skipped), 2 volumes + decals. The volume flag
+// itself travels in XrWorldFrame::volumeShadows; this call owns the decals (XrWorldFrame has no field for "no shadows at all").
+void XrGameBoot_SetShadowMode(int mode);
+// Text entry without an SDL window (docs/visionos-presentation.md section 9): true while the focused game window is a text entry gadget (chat, save
+// game name, lobby name); `currentText` (optional) receives its content (UTF-8).
+bool XrGameBoot_TextFieldFocused(std::string *currentText);
+// Types `utf8` into the focused entry gadget after `backspaces` Backspace presses, then presses Enter when `enter`. False when no entry has the focus.
+bool XrGameBoot_TextInput(const char *utf8, int backspaces, bool enter);
 #endif // __ANDROID__
 
 // One game frame. Returns FALSE once the game wants to quit (or on an
