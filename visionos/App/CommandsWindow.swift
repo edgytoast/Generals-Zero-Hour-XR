@@ -29,7 +29,7 @@ struct CommandsWindow: View {
                 if store.snapshot.session.help {
                     CommandsHelpView()
                 } else {
-                    sections(model)
+                    organized(model)
                 }
             }
             .padding(28)
@@ -55,6 +55,11 @@ struct CommandsWindow: View {
         HStack(alignment: .firstTextBaseline) {
             Text(store.t("Commands")).font(.extraLargeTitle2).accessibilityAddTraits(.isHeader)
             Spacer()
+            if !store.snapshot.session.help, let help = store.commands.control(34) {
+                Button { store.perform(page: page, id: 34) } label: { Label(help.label, systemImage: "questionmark.circle") }
+                    .buttonStyle(.bordered)
+                    .hoverEffect(.highlight)
+            }
             if store.snapshot.engineKind == Int32(GX_ENGINE_KIND_SCRIPTED) {
                 Label(store.t("Scripted demo state (no engine)"), systemImage: "wand.and.stars")
                     .font(.footnote).foregroundStyle(.secondary)
@@ -73,18 +78,36 @@ struct CommandsWindow: View {
         .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
-    // MARK: sections
+    // MARK: layout
 
-    @ViewBuilder private func sections(_ model: PanelPageModel) -> some View {
-        ForEach(model.sections) { section in
-            switch section.id {
-            case -12: groupsSection(section)
-            case -14: PanelSectionView(title: section.title, caption: section.controls.first?.explain) { grid(section.controls, columns: 4) }
-            case -11: PanelSectionView(title: section.title, caption: nil) { grid(section.controls, columns: 3) }
-            case -13: PanelSectionView(title: section.title, caption: nil) { grid(section.controls, columns: 2) }
-            default: PanelSectionView(title: section.title, caption: nil) { grid(section.controls, columns: 2) }
-            }
+    // The Quest console order (orders, "instant & selection" mixed, groups, tactics) is regrouped by what the player wants
+    // to do. Same controls and ids from the C++ panel model, same actions (GXPanelAction_Perform); only the arrangement and
+    // the section wording are the window's own:
+    //   Orders      pick one, then pinch the target on the table (move, attack-move, guard, force attack) + waypoints
+    //   Right now   act at once on the selection (stop, scatter, cancel / deselect)
+    //   Select      whole-army and find-a-unit shortcuts
+    //   Groups      number keys with member counts, then replace / add / centre
+    //   Tactics and map views (fold-out, the engine's tactics toggle 37): formation, force move, no-pursuit guard, views A-D
+    @ViewBuilder private func organized(_ model: PanelPageModel) -> some View {
+        PanelSectionView(title: store.t("Orders"), caption: store.t("Pick an order, then pinch the spot or target on the table.")) {
+            grid(controls(model, [1, 2, 4, 3]), columns: 2)
+            grid(controls(model, [8]), columns: 1)
         }
+        PanelSectionView(title: store.t("Right now"), caption: store.t("Acts at once on the selected units.")) {
+            grid(controls(model, [5, 6, 15]), columns: 3)
+        }
+        PanelSectionView(title: store.t("Select"), caption: nil) {
+            grid(controls(model, [10, 9, 11, 12]), columns: 2)
+            grid(controls(model, [7, 14, 13]), columns: 3)
+            grid(controls(model, [0]), columns: 1)
+        }
+        groupsSection(model)
+        tacticsSection(model)
+        grid(controls(model, [35]), columns: 1)
+    }
+
+    private func controls(_ model: PanelPageModel, _ ids: [Int]) -> [PanelControlItem] {
+        ids.compactMap { model.control($0) }
     }
 
     private func grid(_ controls: [PanelControlItem], columns: Int) -> some View {
@@ -94,16 +117,32 @@ struct CommandsWindow: View {
         }
     }
 
-    /// Groups: ten number keys with member counts, the three operations (replace / new-extend / center), then Help and the tactics foldout.
-    private func groupsSection(_ section: PanelSectionItem) -> some View {
-        let keys = section.controls.filter { $0.role == Int(GX_ROLE_GROUPNUM) }
-        let ops = section.controls.filter { $0.role == Int(GX_ROLE_OP) }
-        let rest = section.controls.filter { $0.role != Int(GX_ROLE_GROUPNUM) && $0.role != Int(GX_ROLE_OP) }
-        return PanelSectionView(title: section.title, caption: keys.first?.explain) {
+    /// Groups: ten number keys with member counts (a number alone recalls the group), then the three operations.
+    private func groupsSection(_ model: PanelPageModel) -> some View {
+        PanelSectionView(title: store.t("Groups"), caption: store.t("A number selects its group. To save one: select units, press Replace or Add, then a number.")) {
             VStack(alignment: .leading, spacing: UITheme.controlSpacing) {
-                grid(ops, columns: 3)
-                grid(keys, columns: 5)
-                grid(rest, columns: 2)
+                grid(controls(model, Array(20...29)), columns: 5)
+                grid(controls(model, [30, 31, 32]), columns: 3)
+            }
+        }
+    }
+
+    /// The engine's tactics fold-out (control 37 toggles it; its controls exist only while it is open).
+    @ViewBuilder private func tacticsSection(_ model: PanelPageModel) -> some View {
+        let open = store.snapshot.session.tactics
+        VStack(alignment: .leading, spacing: UITheme.controlSpacing) {
+            Button { store.perform(page: page, id: 37) } label: {
+                Label(store.t("Tactics and map views"), systemImage: open ? "chevron.down" : "chevron.right")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .hoverEffect(.highlight)
+            if open {
+                grid(controls(model, [40, 41, 42]), columns: 3)
+                Text(store.t("Map views: turn on Save view, then press a letter. A letter alone jumps there."))
+                    .font(.footnote).foregroundStyle(.secondary)
+                grid(controls(model, [43, 44, 45, 46, 47]), columns: 5)
             }
         }
     }
