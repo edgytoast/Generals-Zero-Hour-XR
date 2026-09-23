@@ -96,6 +96,21 @@ namespace TouchInput
 	// Spatial callers already resolved detached panels; ordinary touch keeps GUI refusal.
 	void tap(Int x, Int y, Bool ignoreScreenUI = FALSE);
 
+	/// GeneralsX @feature visionOS 23/09/2026 What tap() at this point WOULD do, without doing it.
+	/// Same decision order and the same engine question (evaluateContextCommand in
+	/// EVALUATE_ONLY mode) as tap(), so a preview drawn from it cannot disagree with the
+	/// order. `target` (optional) receives the drawable the tap would select or act on.
+	enum TapIntent
+	{
+		TAP_NOTHING = 0,   ///< armed command, off the terrain, or the order is not valid here
+		TAP_SELECT = 1,    ///< selects the object under the point
+		TAP_MOVE = 2,      ///< moves the selection there
+		TAP_ATTACK = 3,    ///< attacks the object or attack-moves there
+		TAP_INTERACT = 4,  ///< any other context order (enter, capture, repair, ...)
+		TAP_DESELECT = 5   ///< clears the selection (empty ground, nothing selected)
+	};
+	TapIntent previewTap(Int x, Int y, Bool ignoreScreenUI, Drawable **target);
+
 	/// Second tap in the same spot: select every unit of that type on screen.
 	void doubleTap(Int x, Int y);
 

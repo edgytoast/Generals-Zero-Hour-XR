@@ -1785,6 +1785,42 @@ std::string XrGameBoot_WorldHoverInfo() {
 	auto *o=d->getObject();return xrText(o->getTemplate()->getDisplayName())+"\n"+XrGameBoot_TacticalStatus();
 }
 
+// GeneralsX @feature visionOS 23/09/2026 Pinch preview. Same decision as the click
+// (TouchInput::previewTap mirrors TouchInput::tap); explicit order modes answer for
+// themselves because SpatialClick routes them around tap().
+int XrGameBoot_PointerIntent(XrVector3f *targetRoom,float *targetRadiusM) {
+	if(!s_spatialActive || !TheInGameUI || !TheTacticalView || TheInGameUI->getPendingPlaceType() || !s_mappingReady) return 0;
+	Drawable *target=nullptr;
+	int intent=0;
+	switch(s_tactics.mode) {
+	case XrOrderMode::Context:
+		intent=s_tactics.queue ? int(TouchInput::TAP_MOVE):int(TouchInput::previewTap(s_activePixel.x,s_activePixel.y,TRUE,&target));
+		break;
+	case XrOrderMode::Select: case XrOrderMode::Add: case XrOrderMode::Box: case XrOrderMode::BoxAdd:
+		intent=TouchInput::TAP_SELECT;break;
+	case XrOrderMode::Move: case XrOrderMode::ForceMove:
+		intent=TouchInput::hasControllableSelection() ? int(TouchInput::TAP_MOVE):0;break;
+	case XrOrderMode::AttackMove: case XrOrderMode::ForceAttack:
+		intent=TouchInput::hasControllableSelection() ? int(TouchInput::TAP_ATTACK):0;break;
+	case XrOrderMode::Guard: case XrOrderMode::GuardHold:
+		intent=TouchInput::hasControllableSelection() ? int(TouchInput::TAP_INTERACT):0;break;
+	}
+	if(target && target->getObject() && targetRoom && targetRadiusM) {
+		const Coord3D *p=target->getPosition();
+		const Real r=std::max<Real>(target->getObject()->getGeometryInfo().getBoundingCircleRadius(),5.0f);
+		const auto local=xrTransformPoint(s_worldMapping,{p->x,p->y,p->z});
+		const auto edge=xrTransformPoint(s_worldMapping,{p->x+r,p->y,p->z});
+		const XrSurface &board=s_worldFrame.board;
+		*targetRoom=xrAdd(board.pose.position,xrRotate(board.pose.orientation,xrScale(local,board.width)));
+		*targetRadiusM=std::clamp(xrLength(xrSub(edge,local))*board.width,0.008f,0.12f);
+	}
+	return intent;
+}
+int XrGameBoot_PlacementLegal() {
+	if(!TheInGameUI || !TheInGameUI->getPendingPlaceType()) return -1;
+	return TheInGameUI->getPlacementLegalState();
+}
+
 // GeneralsX @feature Codex 13/09/2026 Decoration uses the same eye depth as
 // the live game. Terrain samples close its cut faces; no replacement map.
 static void drawXrWorldDecorations() {

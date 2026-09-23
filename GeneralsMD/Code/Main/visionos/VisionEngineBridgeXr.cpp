@@ -66,11 +66,16 @@ public:
 	bool CanRotatePlacement() override { return XrGameBoot_CanRotatePlacement(); }
 	bool RotatePlacement(float radians) override { return XrGameBoot_RotatePlacement(radians); }
 	float PlacementDegrees() override { return XrGameBoot_PlacementDegrees(); }
-	// The engine keeps the preview icon (and so its position) private to InGameUI/W3DInGameUI, and XrGameBoot does not
-	// export a legality query, so "unknown" is the honest answer until package C adds one (see docs/visionos-interaction.md
-	// section 9: W3DInGameUI::isXrPlacementLegal() wrapping TheBuildAssistant->isLocationLegalToBuild on m_placeIcon[0],
-	// then return it from here). The engine itself already tints an illegal ghost red.
-	int PlacementLegal() override { return -1; }
+	// The engine's own legality check of the ghost (the one that tints it red), kept by InGameUI.
+	int PlacementLegal() override { return XrGameBoot_PlacementLegal(); }
+	int PointerIntent(XrVector3f &target, float &radius, bool &hasTarget) override {
+		hasTarget = false;
+		XrVector3f t = {};
+		float r = -1.0f;
+		const int intent = XrGameBoot_PointerIntent(&t, &r);
+		if (r > 0.0f) { target = t; radius = r; hasTarget = true; }
+		return intent;
+	}
 	bool HasArmedCommand() override {
 #if !defined(GX_VISION_BRIDGE_NO_ENGINE_QUERIES)
 		return TouchInput::hasArmedCommand() != 0;

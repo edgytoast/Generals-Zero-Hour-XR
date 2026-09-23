@@ -1076,6 +1076,7 @@ InGameUI::InGameUI()
 	m_mouseMode = MOUSEMODE_DEFAULT;
 	m_mouseModeCursor = Mouse::ARROW;
 	m_mousedOverDrawableID = INVALID_DRAWABLE_ID;
+	m_placementLegalState = -1;
 	m_touchAimKnown = FALSE;
 	m_touchAimValid = FALSE;
 	m_touchAimPoint.x = m_touchAimPoint.y = 0;
@@ -2076,6 +2077,9 @@ void InGameUI::handleBuildPlacements()
 																												 BuildAssistant::IGNORE_STEALTHED,
 																												 builderObject,
 																												 nullptr );
+
+				// GeneralsX @feature visionOS 23/09/2026 Keep the answer for the XR placement cue.
+				m_placementLegalState = ( lbc == LBC_OK ) ? 1 : 0;
 
 				if( lbc != LBC_OK )
 					m_placeIcon[ 0 ]->colorTint( &IllegalBuildColor );
@@ -3707,6 +3711,7 @@ void InGameUI::placeBuildAvailable( const ThingTemplate *build, Drawable *buildD
 		// ghost must not appear at wherever the player last touched the map before they
 		// picked this building. It appears when a finger points somewhere, and there.
 		clearTouchAimPoint();
+		m_placementLegalState = -1;
 	}
 
 	//

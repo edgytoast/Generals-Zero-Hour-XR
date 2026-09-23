@@ -80,9 +80,11 @@ public:
 	virtual bool CanRotatePlacement() = 0;
 	virtual bool RotatePlacement(float radians) = 0;
 	virtual float PlacementDegrees() = 0;
-	// Optional: -1 unknown, 0 illegal location, 1 legal. Package C may implement it with
-	// TheBuildAssistant->isLocationLegalToBuild on the preview icon; the default is "unknown".
+	// Optional: -1 unknown, 0 illegal location, 1 legal (XrGameBoot_PlacementLegal: the engine's own ghost check).
 	virtual int PlacementLegal() { return -1; }
+	// Optional pinch preview: what a click at the active spatial pointer would do (kVisionIntent*); `target`/`radius` get the
+	// room-space position and table size of the object it would select or act on, if any. Issues nothing.
+	virtual int PointerIntent(XrVector3f &target, float &radius, bool &hasTarget) { (void)target; (void)radius; hasTarget = false; return 0; }
 	// Optional: TouchInput::hasArmedCommand() (superweapon / ability waiting for a target).
 	virtual bool HasArmedCommand() { return false; }
 

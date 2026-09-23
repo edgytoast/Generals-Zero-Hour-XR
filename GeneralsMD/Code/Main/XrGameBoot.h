@@ -60,6 +60,14 @@ void XrGameBoot_SetLanguage(int language);
 std::string XrGameBoot_LanguageStatus();
 bool XrGameBoot_ExpandedUI();
 std::string XrGameBoot_WorldHoverInfo();
+// GeneralsX @feature visionOS 23/09/2026 Pinch preview: what a click at the active spatial pointer would do
+// (TouchInput::TapIntent values: 0 nothing, 1 select, 2 move, 3 attack, 4 interact, 5 deselect). When the click acts on or
+// selects an object, `targetRoom` gets its position in room space and `targetRadiusM` its size on the table (metres);
+// both are left alone otherwise. Issues nothing.
+int XrGameBoot_PointerIntent(XrVector3f *targetRoom,float *targetRadiusM);
+// GeneralsX @feature visionOS 23/09/2026 Placement ghost legality from the engine's own check: -1 unknown / no placement,
+// 0 illegal, 1 legal.
+int XrGameBoot_PlacementLegal();
 // GeneralsX @feature Muse 16/09/2026 Read-only match-result latch: poll once
 // before and after the game frame; MatchResult returns None when no result
 // is latched or the card was dismissed. Dismiss never touches the engine.

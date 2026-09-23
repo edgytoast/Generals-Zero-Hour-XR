@@ -297,6 +297,78 @@ namespace TouchInput
 	}
 
 	//-------------------------------------------------------------------------------------
+	// GeneralsX @feature visionOS 23/09/2026 tap() without the effects, for the pinch preview.
+	// Keep the branches in the same order as tap() above.
+	TapIntent previewTap(Int x, Int y, Bool ignoreScreenUI, Drawable **target)
+	{
+		if (target != nullptr)
+			*target = nullptr;
+		if (TheInGameUI == nullptr || TheTacticalView == nullptr || TheGameClient == nullptr || hasArmedCommand())
+			return TAP_NOTHING;
+
+		ICoord2D pixel;
+		pixel.x = x;
+		pixel.y = y;
+		Coord3D pos;
+		const Bool onTerrain = TheTacticalView->screenToTerrain(&pixel, &pos);
+
+		Drawable *selectable = pickForSelection(pixel, ignoreScreenUI);
+		if (selectable != nullptr)
+		{
+			const Object *obj = selectable->getObject();
+			if (obj != nullptr && obj->isLocallyControlled())
+			{
+				const Bool interacts = onTerrain && hasControllableSelection() &&
+															 !selectable->isSelected() &&
+															 selectionInteractsWith(selectable, pos);
+				if (!interacts)
+				{
+					if (target != nullptr)
+						*target = selectable;
+					return TAP_SELECT;
+				}
+			}
+		}
+
+		if (!onTerrain)
+			return TAP_NOTHING;
+
+		if (hasControllableSelection())
+		{
+			Drawable *draw = pickForOrder(pixel);
+			const GameMessage::Type t =
+				TheGameClient->evaluateContextCommand(draw, &pos, CommandTranslator::EVALUATE_ONLY);
+			switch (t)
+			{
+				case GameMessage::MSG_INVALID:
+					return TAP_NOTHING;
+				case GameMessage::MSG_DO_MOVETO:
+					return TAP_MOVE;
+				case GameMessage::MSG_DO_ATTACKMOVETO:
+				case GameMessage::MSG_DO_FORCE_ATTACK_GROUND:
+					return TAP_ATTACK;
+				case GameMessage::MSG_DO_ATTACK_OBJECT:
+				case GameMessage::MSG_DO_FORCE_ATTACK_OBJECT:
+					if (target != nullptr)
+						*target = draw;
+					return TAP_ATTACK;
+				default:
+					if (target != nullptr)
+						*target = draw;
+					return TAP_INTERACT;
+			}
+		}
+
+		if (selectable != nullptr)
+		{
+			if (target != nullptr)
+				*target = selectable;
+			return TAP_SELECT;
+		}
+		return TAP_DESELECT;
+	}
+
+	//-------------------------------------------------------------------------------------
 	void doubleTap(Int x, Int y)
 	{
 		if (skipMovieIfPlaying())

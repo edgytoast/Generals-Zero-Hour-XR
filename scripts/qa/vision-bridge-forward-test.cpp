@@ -45,6 +45,12 @@ bool XrGameBoot_CanAdjustWorld() { rec("CanAdjustWorld"); return g_ret; }
 bool XrGameBoot_CanRotatePlacement() { rec("CanRotatePlacement"); return g_ret; }
 bool XrGameBoot_RotatePlacement(float radians) { recf("RotatePlacement", radians); return g_ret; }
 float XrGameBoot_PlacementDegrees() { rec("PlacementDegrees"); return 42.5f; }
+int XrGameBoot_PlacementLegal() { rec("PlacementLegal"); return 1; }
+int XrGameBoot_PointerIntent(XrVector3f *targetRoom, float *targetRadiusM) {
+	rec("PointerIntent");
+	if (targetRoom && targetRadiusM) { *targetRoom = {0.25f, 0.8f, -0.9f}; *targetRadiusM = 0.03f; }
+	return 3;
+}
 bool XrGameBoot_CanObserveGround() { rec("CanObserveGround"); return g_ret; }
 bool XrGameBoot_PickObserverGround(const XrSurface &board, const XrPosef &aim, XrVector3f &ground, XrVector3f *roomPoint) {
 	recf("PickObserverGround", board.width, aim.position.x, roomPoint != nullptr);
@@ -127,7 +133,14 @@ int main() {
 	CHECK(b->PlacementPending());            expectOnly("CanRotatePlacement"); // default: same as CanRotatePlacement
 	CHECK(b->RotatePlacement(0.75f));        expectOnly("RotatePlacement(0.75,0,0,0,0,0)");
 	CHECK(b->PlacementDegrees() == 42.5f);   expectOnly("PlacementDegrees");
-	CHECK(b->PlacementLegal() == -1);        CHECK(g_log.empty());
+	CHECK(b->PlacementLegal() == 1);         expectOnly("PlacementLegal");
+	{
+		XrVector3f t = {};
+		float r = 0;
+		bool has = false;
+		CHECK(b->PointerIntent(t, r, has) == 3); expectOnly("PointerIntent");
+		CHECK(has && t.x == 0.25f && t.y == 0.8f && t.z == -0.9f && r == 0.03f);
+	}
 	CHECK(!b->HasArmedCommand());            CHECK(g_log.empty());
 
 	// Ground View.

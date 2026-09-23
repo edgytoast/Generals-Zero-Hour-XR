@@ -478,6 +478,9 @@ public:  // ********************************************************************
 	// whether the armed command accepts it. See m_touchAimKnown.
 	void setTouchAimPoint( Int x, Int y, Bool valid );
 	void clearTouchAimPoint() { m_touchAimKnown = FALSE; m_touchAimValid = FALSE; }
+	// GeneralsX @feature visionOS 23/09/2026 The last legality check of the placement ghost (the one that tints it):
+	// -1 not checked yet for this placement, 0 illegal, 1 legal. Read by the XR host for its own placement cue.
+	Int getPlacementLegalState() const { return m_placementLegalState; }
 
 	virtual void setInputEnabled( Bool enable );										///< Set the input enabled or disabled
 	virtual Bool getInputEnabled() { return m_inputEnabled; }	///< Get the current input status
@@ -975,6 +978,7 @@ protected:
 	//
 	// Validity comes from evaluateContextCommand's EVALUATE_ONLY mode, the same evaluation
 	// the order itself will run, so the feedback cannot disagree with the outcome.
+	Int													m_placementLegalState;
 	Bool												m_touchAimKnown;
 	Bool												m_touchAimValid;
 	ICoord2D										m_touchAimPoint;
