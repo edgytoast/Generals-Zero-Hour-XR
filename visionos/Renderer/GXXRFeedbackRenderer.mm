@@ -35,6 +35,18 @@ void pushDisk(std::vector<GXXRFlatVertex> &v, simd_float3 center, simd_float3 no
         prev = cur;
     }
 }
+// Pinch preview colours (GXHostFeedback: VisionIntent values): what the pinch does, one colour per kind of result.
+simd_float4 IntentColor(int32_t intent, float alpha) {
+    switch (intent) {
+    case 1: return simd_make_float4(0.35f, 0.85f, 1.0f, alpha);  // select: cyan
+    case 2: return simd_make_float4(0.35f, 0.95f, 0.45f, alpha); // move: green
+    case 3: return simd_make_float4(1.0f, 0.3f, 0.25f, alpha);   // attack: red
+    case 4: return simd_make_float4(1.0f, 0.78f, 0.25f, alpha);  // interact (enter, capture, repair, guard): amber
+    case 5: return simd_make_float4(0.75f, 0.75f, 0.75f, alpha); // deselect: grey
+    default: return simd_make_float4(1.0f, 0.95f, 0.35f, alpha * 0.8f); // unknown / not valid here: pale yellow (the old cursor)
+    }
+}
+
 // A ring (annulus) outline, optionally a partial arc (`fraction` of the full circle, from angle 0).
 void pushRing(std::vector<GXXRFlatVertex> &v, simd_float3 center, simd_float3 normal, float radius, float thickness, simd_float4 color,
               float fraction = 1.0f, int sides = 28) {
@@ -180,7 +192,15 @@ void pushRing(std::vector<GXXRFlatVertex> &v, simd_float3 center, simd_float3 no
         pushQuad(translucent, pos - hr - hf, pos + hr - hf, pos + hr + hf, pos - hr + hf, col);
     }
     if (fb->flags & GX_FB_CURSOR) {
-        pushDisk(_verts, V(fb->cursor) + boardNormal * 0.001f, boardNormal, markerRadius, simd_make_float4(1.0f, 0.95f, 0.35f, 0.85f));
+        pushDisk(_verts, V(fb->cursor) + boardNormal * 0.001f, boardNormal, markerRadius, IntentColor(fb->cursorIntent, 0.85f));
+    }
+    if (fb->flags & GX_FB_TARGET) {
+        const float age = std::max(0.0f, fb->targetAge);
+        const float alpha = 0.9f * std::max(0.0f, 1.0f - age / 1.2f);
+        if (alpha > 0.01f) {
+            const float radius = std::max(markerRadius * 1.5f, fb->targetRadius * 1.25f);
+            pushRing(_verts, V(fb->target) + boardNormal * 0.002f, boardNormal, radius, ribbonHalf * 1.4f, IntentColor(fb->targetIntent, alpha));
+        }
     }
     if (fb->flags & GX_FB_PANEL_POINTER && layerWorldFromQuad != nullptr && fb->pointerLayer >= 0 && (NSUInteger)fb->pointerLayer < layerCount) {
         const simd_float4x4& pose = layerWorldFromQuad[(NSUInteger)fb->pointerLayer];
@@ -215,7 +235,7 @@ void pushRing(std::vector<GXXRFlatVertex> &v, simd_float3 center, simd_float3 no
         const float alpha = std::max(0.0f, 1.0f - age / 1.2f);
         if (alpha > 0.01f) {
             const float grow = 1.0f + age * 0.6f; // the ring expands slightly as it fades
-            pushRing(_verts, V(fb->waypoint) + boardNormal * 0.001f, boardNormal, markerRadius * 1.1f * grow, ribbonHalf, simd_make_float4(1, 0.75f, 0.2f, alpha));
+            pushRing(_verts, V(fb->waypoint) + boardNormal * 0.001f, boardNormal, markerRadius * 1.1f * grow, ribbonHalf, IntentColor(fb->waypointIntent, alpha));
         }
     }
     _verts.insert(_verts.end(), translucent.begin(), translucent.end());

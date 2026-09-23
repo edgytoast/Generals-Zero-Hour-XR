@@ -204,6 +204,13 @@ VisionInteraction::Ptr *VisionInteraction::other(const Ptr *p) {
 
 // =============================================================== engine call wrappers
 
+VisionIntentPreview VisionInteraction::engineIntent() {
+	VisionIntentPreview v;
+	if (!bridge_) return v;
+	engineTouched_ = true;
+	v.intent = bridge_->PointerIntent(v.target, v.targetRadius, v.hasTarget);
+	return v;
+}
 bool VisionInteraction::enginePick(const XrPosef &aim, XrWorldHit &hit) {
 	if (!bridge_) return false;
 	engineTouched_ = true;
@@ -255,6 +262,7 @@ void VisionInteraction::update(const VisionHostState &host, const XRInteractionE
 	prevHost_ = host_;
 	host_ = host;
 	events_ = 0;
+	tapPreview_ = VisionIntentPreview();
 	engineTouched_ = false;
 	activationCount_ = 0;
 	cursorVisible_ = cursorOnBoard_ = rayVisible_ = false;
@@ -864,6 +872,7 @@ void VisionInteraction::startRole(Ptr &p) {
 		placementPoint_ = hit.room;
 		placementHasPoint_ = true;
 		if (p.role == Role::Select) {
+			p.preview = engineIntent(); // the pointer is live at the start hit: ask what a tap here will do
 			// Our own hand-space classifier (same class and 2 cm threshold as the engine's trigger) must be armed too.
 			p.trig = XrTriggerGesture();
 			p.trig.update(false, true, p.pos, false, false);
@@ -1200,6 +1209,7 @@ void VisionInteraction::releaseSelect(Ptr &p) {
 	if (!enginePick(p.startAim, hit)) { engineNeutral(); return; }
 	engineSpatialPointer(true);
 	enginePointer(true, hit.x, hit.y, false);
+	tapPreview_ = engineIntent(); // before the click changes the selection
 	engineTrigger(false, true, add); // arm (idempotent)
 	engineTrigger(true, true, add);  // press: nothing is ordered yet
 	engineTrigger(false, true, add); // release without drag: the engine issues Click (select / contextual order)
@@ -1668,6 +1678,9 @@ void VisionInteraction::fillOutput(VisionInteractionOutput &out) {
 		const BoardGeometry g = geometry(board_, host_.boardAspect);
 		return std::fabs(l.x) <= g.hx && std::fabs(l.y) <= g.hy;
 	}();
+	for (const auto &p : ptr_)
+		if (p.used && !p.released && p.role == Role::Select && p.pickedStart) { out.preview = p.preview; break; }
+	out.tapPreview = tapPreview_;
 	out.panelPointerPanel = panelPointerPanel_;
 	out.panelU = panelU_;
 	out.panelV = panelV_;

@@ -15,6 +15,10 @@ public:
 	bool interactive = false, canStereo = false, expanded = false, canAdjust = false, canObserve = false;
 	bool armed = false, pendingPlacement = false;
 	int legal = -1;
+	int intent = 0;                 // PointerIntent: what a tap at the pointer would do (kVisionIntent*)
+	bool intentHasTarget = false;
+	XrVector3f intentTarget = {};
+	float intentRadius = 0;
 	int gameW = 1280, gameH = 720;
 	float mapAspect = 9.0f / 16.0f;
 	float walkableRadius = 1e9f; // observer picks / steps beyond this board-space radius are refused
@@ -58,6 +62,11 @@ public:
 	bool RotatePlacement(float) override { return pendingPlacement; }
 	float PlacementDegrees() override { return 0; }
 	int PlacementLegal() override { return legal; }
+	int PointerIntent(XrVector3f &target, float &radius, bool &hasTarget) override {
+		hasTarget = intentHasTarget;
+		if (hasTarget) { target = intentTarget; radius = intentRadius; }
+		return intent;
+	}
 	bool HasArmedCommand() override { return armed; }
 	bool CanObserveGround() override { return canObserve; }
 	bool PickObserverGround(const XrSurface &board, const XrPosef &aim, XrVector3f &ground, XrVector3f *roomPoint) override {

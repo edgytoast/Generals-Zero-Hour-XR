@@ -82,7 +82,8 @@ enum {
     GX_FB_GROUND_TARGET = 1u << 5,/* Ground View teleport reticle at groundTarget, hold ring */
     GX_FB_RAY = 1u << 6,          /* eye-to-cursor ribbon */
     GX_FB_HOVER = 1u << 7,        /* hover / focus highlight on a panel layer or the grab bar: hoverQuad */
-    GX_FB_WAYPOINT = 1u << 8      /* destination marker at waypoint (a confirmed move / placement point, fades) */
+    GX_FB_WAYPOINT = 1u << 8,     /* destination marker at waypoint (a confirmed move / placement point, fades) */
+    GX_FB_TARGET = 1u << 9        /* ring around the object a pinch selects or acts on: target, targetRadius, targetIntent */
 };
 typedef struct GXHostFeedback {
     uint32_t flags;             /* GX_FB_* */
@@ -110,6 +111,14 @@ typedef struct GXHostFeedback {
     float waypoint[3];
     float waypointAge;          /* seconds since the waypoint was set; the marker fades over 1.2 s */
     float fadeAlpha;            /* comfort fade veil 0..1 over the whole view (drawn last) */
+    /* Pinch preview (VisionIntent: 0 none, 1 select, 2 move, 3 attack, 4 interact, 5 deselect). The colours say what the
+     * pinch does: select cyan, move green, attack red, interact amber, deselect grey. */
+    int32_t cursorIntent;       /* the held pinch: tints the cursor */
+    int32_t waypointIntent;     /* the tap that set the waypoint: tints the destination marker */
+    float target[3];            /* GX_FB_TARGET: centre of the object on the table */
+    float targetRadius;         /* metres */
+    int32_t targetIntent;
+    float targetAge;            /* 0 while the pinch is held; seconds since the tap afterwards (fades over 1.2 s) */
 } GXHostFeedback;
 
 typedef struct GXHostFrameOutput {

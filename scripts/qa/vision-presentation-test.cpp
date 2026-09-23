@@ -705,6 +705,48 @@ static void testFeedback() {
 		fb2.build(t.out, t.host, plan, gfx, f);
 		CHECK(!(f.flags & GX_FB_WAYPOINT));
 	}
+	// pinch preview: the engine says "attack that object": red cursor and a ring on the object while held, then a red
+	// destination marker and a fading ring after the tap
+	{
+		Sim t;
+		VisionFeedbackBuilder fb3;
+		t.bridge.intent = kVisionIntentAttack;
+		t.bridge.intentHasTarget = true;
+		t.bridge.intentTarget = visionBoardToWorld(t.host.board, {0.12f, 0.06f, 0.01f});
+		t.bridge.intentRadius = 0.02f;
+		t.begin(visionBoardToWorld(t.host.board, {0.1f, 0.05f, 0}), kHand);
+		t.frame();
+		fb3.build(t.out, t.host, plan, gfx, f);
+		CHECK(t.out.preview.intent == kVisionIntentAttack && t.out.preview.hasTarget);
+		CHECK((f.flags & GX_FB_CURSOR) && f.cursorIntent == kVisionIntentAttack);
+		CHECK((f.flags & GX_FB_TARGET) && f.targetIntent == kVisionIntentAttack && f.targetAge == 0.0f);
+		NEAR(f.targetRadius, 0.02f);
+		VNEAR((XrVector3f{f.target[0], f.target[1], f.target[2]}), t.bridge.intentTarget);
+		t.end(kHand);
+		t.frame();
+		CHECK((t.out.events & kVisionEventTap) && t.out.tapPreview.intent == kVisionIntentAttack);
+		fb3.build(t.out, t.host, plan, gfx, f);
+		CHECK((f.flags & GX_FB_WAYPOINT) && f.waypointIntent == kVisionIntentAttack);
+		CHECK((f.flags & GX_FB_TARGET) && f.targetIntent == kVisionIntentAttack);
+		t.frames(90);
+		fb3.build(t.out, t.host, plan, gfx, f);
+		CHECK(!(f.flags & (GX_FB_TARGET | GX_FB_WAYPOINT)));
+		// a tap that only selects: the object's ring, no destination marker
+		Sim u;
+		VisionFeedbackBuilder fb4;
+		u.bridge.intent = kVisionIntentSelect;
+		u.bridge.intentHasTarget = true;
+		u.bridge.intentTarget = visionBoardToWorld(u.host.board, {0.1f, 0.05f, 0.01f});
+		u.bridge.intentRadius = 0.015f;
+		u.begin(visionBoardToWorld(u.host.board, {0.1f, 0.05f, 0}), kHand);
+		u.frame();
+		fb4.build(u.out, u.host, plan, gfx, f);
+		CHECK(f.cursorIntent == kVisionIntentSelect && (f.flags & GX_FB_TARGET));
+		u.end(kHand);
+		u.frame();
+		fb4.build(u.out, u.host, plan, gfx, f);
+		CHECK(!(f.flags & GX_FB_WAYPOINT) && (f.flags & GX_FB_TARGET) && f.targetIntent == kVisionIntentSelect);
+	}
 	// Ground View: comfort fade veil at the switch, then ramp down; the switch turns it off
 	{
 		Sim g;

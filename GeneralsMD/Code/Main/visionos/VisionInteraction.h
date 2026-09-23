@@ -153,6 +153,16 @@ struct VisionBoxRect {
 	XrVector3f corners[4] = {};  // world-space corners on the board surface, counter-clockwise from above
 };
 
+// Pinch preview (TouchInput::TapIntent values): what releasing the current board pinch will do.
+enum VisionIntent { kVisionIntentNone = 0, kVisionIntentSelect = 1, kVisionIntentMove = 2, kVisionIntentAttack = 3,
+	kVisionIntentInteract = 4, kVisionIntentDeselect = 5 };
+struct VisionIntentPreview {
+	int intent = kVisionIntentNone;
+	bool hasTarget = false;
+	XrVector3f target = {};      // room space, the object the click selects or acts on
+	float targetRadius = 0;      // metres on the table
+};
+
 struct VisionPlacementFeedback {
 	bool active = false;         // a building preview or armed command exists in the engine
 	bool ghostFollowing = false; // a pinch is moving the ghost
@@ -215,6 +225,9 @@ struct VisionInteractionOutput {
 	bool cursorOnBoard = false;
 	bool rayVisible = false;
 	XrVector3f rayStart = {}, rayEnd = {};
+	// Pinch preview while a board pinch is held (select role), and the preview of a tap released this frame (with kVisionEventTap).
+	VisionIntentPreview preview;
+	VisionIntentPreview tapPreview;
 	// Which panel the pinch is over (engine pixel pointer, UV in the GL-native bottom-up convention).
 	int panelPointerPanel = -1;
 	float panelU = 0, panelV = 0;
@@ -359,6 +372,7 @@ private:
 		XrPosef startAim = {{0, 0, 0, 1}, {0, 0, 0}};
 		bool pickedStart = false;
 		XrWorldHit startHit;
+		VisionIntentPreview preview; // what releasing this pinch as a tap will do (select role)
 		XrVector3f startLocal = {};    // press hit in board space (metres)
 		bool boxAdditive = false;
 		// panel bookkeeping
@@ -458,6 +472,7 @@ private:
 	void cancelAll(VisionResetReason reason, bool cancelEngineTargets);
 
 	void raise(uint32_t bit) { events_ |= bit; }
+	VisionIntentPreview engineIntent();
 
 	VisionEngineBridge *bridge_;
 	VisionConfig cfg_;
@@ -519,6 +534,7 @@ private:
 
 	// per-frame output scratch
 	uint32_t events_ = 0;
+	VisionIntentPreview tapPreview_; // the preview of a tap released this step
 	VisionBoxRect boxState_;
 	int activationCount_ = 0;
 	VisionPanelActivation activations_[kVisionMaxActivations];

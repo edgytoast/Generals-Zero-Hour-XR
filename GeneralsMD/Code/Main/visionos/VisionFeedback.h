@@ -51,6 +51,32 @@ public:
 			fb.flags |= GX_FB_CURSOR;
 			put(fb.cursor, o.cursorWorld);
 			fb.cursorOnBoard = 1;
+			fb.cursorIntent = o.preview.intent;
+		}
+		// Target ring: live while a board pinch is held over an object, then the tapped object's ring fades out.
+		if (marker && o.preview.hasTarget) {
+			fb.flags |= GX_FB_TARGET;
+			put(fb.target, o.preview.target);
+			fb.targetRadius = o.preview.targetRadius;
+			fb.targetIntent = o.preview.intent;
+			fb.targetAge = 0;
+		}
+		if ((o.events & kVisionEventTap) != 0 && o.tapPreview.hasTarget) {
+			tapTarget_ = o.tapPreview;
+			tapTargetTime_ = host.time_s;
+			haveTapTarget_ = true;
+		}
+		if (marker && haveTapTarget_ && !(fb.flags & GX_FB_TARGET)) {
+			const float age = float(host.time_s - tapTargetTime_);
+			if (age >= 0.0f && age < kWaypointSeconds) {
+				fb.flags |= GX_FB_TARGET;
+				put(fb.target, tapTarget_.target);
+				fb.targetRadius = tapTarget_.targetRadius;
+				fb.targetIntent = tapTarget_.intent;
+				fb.targetAge = age;
+			} else {
+				haveTapTarget_ = false;
+			}
 		}
 		if (marker && o.rayVisible) {
 			fb.flags |= GX_FB_RAY;
@@ -100,7 +126,9 @@ public:
 			lastCursorTime_ = host.time_s;
 			haveLastCursor_ = true;
 		}
-		if (marker && (o.events & kVisionEventTap) != 0) {
+		// A tap that selects shows the target ring only; a destination marker would read as "go there".
+		if (marker && (o.events & kVisionEventTap) != 0 && o.tapPreview.intent != kVisionIntentSelect) {
+			waypointIntent_ = o.tapPreview.intent;
 			if (o.cursorVisible && o.cursorOnBoard) {
 				waypoint_ = o.cursorWorld;
 				waypointTime_ = host.time_s;
@@ -117,6 +145,7 @@ public:
 				fb.flags |= GX_FB_WAYPOINT;
 				put(fb.waypoint, waypoint_);
 				fb.waypointAge = age;
+				fb.waypointIntent = waypointIntent_;
 			} else if (age >= kWaypointSeconds || age < 0.0f) {
 				haveWaypoint_ = false;
 			}
@@ -124,7 +153,7 @@ public:
 		fb.fadeAlpha = fade ? std::clamp(o.ground.fadeAlpha, 0.0f, 1.0f) : 0.0f;
 	}
 
-	void reset() { haveWaypoint_ = haveLastCursor_ = false; }
+	void reset() { haveWaypoint_ = haveLastCursor_ = haveTapTarget_ = false; }
 
 private:
 	static void put(float *dst, const XrVector3f &v) { dst[0] = v.x; dst[1] = v.y; dst[2] = v.z; }
@@ -133,4 +162,8 @@ private:
 	double lastCursorTime_ = 0;
 	XrVector3f waypoint_ = {};
 	double waypointTime_ = 0;
+	int waypointIntent_ = kVisionIntentNone;
+	bool haveTapTarget_ = false;
+	VisionIntentPreview tapTarget_;
+	double tapTargetTime_ = 0;
 };
