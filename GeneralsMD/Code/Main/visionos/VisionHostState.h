@@ -69,7 +69,7 @@ struct VisionHostState {
 	bool boardPlaced = false;
 	bool boardVisible = true;
 	XrSurface board;
-	float boardAspect = 9.0f / 16.0f; // height / width of the map area (tactical view h / w)
+	float boardAspect = 1.0f;         // depth / width of the map area: square on visionOS (XrGameBoot s_worldAspect = 1)
 	bool tableHeightKnown = false;    // ARKit plane detection found a table (not available in the simulator)
 	float tableHeight = 0;            // world Y of that table top
 	float worldZoom = 1.0f;           // host-side map zoom (coverage multiplier 0.5..3, Quest semantics)

@@ -64,7 +64,7 @@ namespace {
 constexpr float kBoardHalfX = 0.5f;
 constexpr float kBoardHalfZ = 0.3f;
 constexpr float kBoardHeight = 0.8f;
-constexpr float kBoardDistance = 1.1f;  // same as VisionInteractionConfig::initialDistanceM
+constexpr float kBoardDistance = 1.25f;  // same as VisionInteractionConfig::initialDistanceM
 // Head height used when ARKit gives no device anchor (e.g. some simulator states).
 constexpr float kFallbackHeadHeight = 1.5f;
 // Frames to wait for a tracked anchor before placing the board with the fallback pose.
@@ -697,7 +697,7 @@ static void GXXRDebugDumpTexture(id<MTLCommandBuffer> cb, id<MTLTexture> tex, NS
         const float headY = worldFromDevice.columns[3].y;
         const bool floorOrigin = headY > 1.0f && headY < 2.3f;
         const float surfaceY = floorOrigin ? kBoardHeight : headY - 0.35f;
-        const simd_float3 center = head + fwd * (floorOrigin ? kBoardDistance : 1.45f);
+        const simd_float3 center = head + fwd * (floorOrigin ? kBoardDistance : 1.6f);
         wfb.columns[3] = simd_make_float4(center.x, surfaceY, center.z, 1.0f);
         {
             std::lock_guard<std::mutex> lock(sh.mutex);

@@ -608,12 +608,12 @@ static void testHitTesting() {
 
 // =========================================================================================== 6. readability
 static void testReadability() {
-	// UI text of 1280x720 on the control-bar console seen from the default seat: head 1.0 m behind the board center
+	// UI text of 1280x720 on the control-bar console seen from the default seat: head 1.25 m behind the board center
 	// (VisionConfig::initialDistanceM), 0.45 m above the table
 	VisionLayoutInput li;
 	li.mode = VisionPresentationMode::Tabletop;
 	li.boardPlaced = true;
-	li.board = flatBoard({0, 0.0f, -1.0f}, 1.0f);   // table at y = 0
+	li.board = flatBoard({0, 0.0f, -1.25f}, 1.1f);  // table at y = 0: the square default (1.1 m, 1.25 m ahead)
 	li.commandRect = xrCommandRect(0.30f);
 	VisionPanelPlan plan;
 	visionLayoutPanels(li, plan);
@@ -865,7 +865,7 @@ static void testWorkspace() {
 	// a default-width layout does not trigger a restore
 	VisionWorkspace d;
 	d.ensureAnchor(f);
-	d.record(flatBoard({1.0f, 0.8f, -2.9f}, 1.3f), bar, 1.0f);
+	d.record(flatBoard({1.0f, 0.8f, -2.9f}, 1.1f), bar, 1.0f);
 	CHECK(d.save(path));
 	VisionWorkspace dr;
 	dr.loadFrom(path, "", 1);

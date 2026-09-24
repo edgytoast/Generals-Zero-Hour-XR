@@ -1242,6 +1242,11 @@ static bool xrPrepareWorldMapping() {
 		ViewDefaultPitchRadians,s_worldFrame.coverage);
 	if(!xrWorldToBoard(board,{center.x,center.y,center.z},axis,s_worldSpan)) return false;
 	memcpy(s_worldMapping,board,sizeof(board));s_worldAspect=float(h)/w;s_worldMaxHeight=extent.hi.z;
+#if defined(GX_PLATFORM_VISIONOS)
+	// GeneralsX @feature visionOS 24/09/2026 A square table (VisionHostState::boardAspect = 1): the same map width, and as
+	// deep again. The stereo eyes render the board region from this mapping, not the 16:9 tactical viewport.
+	s_worldAspect=1.0f;
+#endif
 	s_mappingReady=true;return true;
 }
 void GX_XR_BeginStereoWorld() {

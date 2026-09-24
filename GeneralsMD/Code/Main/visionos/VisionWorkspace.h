@@ -35,7 +35,7 @@ struct VisionWorkspace {
 		loaded = restored;
 		const float width = layout.relative[1].width;
 		// Only a saved width that the interaction layer would also accept is restored (0.45 ... 2.0 m).
-		widthPending = restored && std::isfinite(width) && width >= 0.45f && width <= 2.0f && std::fabs(width - 1.3f) > 0.02f; // 1.3 m = VisionConfig::boardDefaultWidthM
+		widthPending = restored && std::isfinite(width) && width >= 0.45f && width <= 2.0f && std::fabs(width - 1.1f) > 0.02f; // 1.1 m = VisionConfig::boardDefaultWidthM
 		savedBoardWidth = widthPending ? width : 0.0f;
 		layout.applyFreeStandingStart();  // P20: never restore yesterday's room-relative geometry
 		dirty = upgraded || !restored;

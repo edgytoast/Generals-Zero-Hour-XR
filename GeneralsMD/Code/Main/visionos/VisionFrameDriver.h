@@ -68,7 +68,7 @@ public:
 
 	explicit VisionFrameDriver(VisionEngineBridge *bridge, const VisionConfig &config = VisionConfig())
 		: bridge_(bridge), interaction_(bridge, config) {
-		host_.boardAspect = 9.0f / 16.0f;
+		host_.boardAspect = 1.0f; // square table (XrGameBoot s_worldAspect on visionOS)
 	}
 
 	VisionInteraction &interaction() { return interaction_; }

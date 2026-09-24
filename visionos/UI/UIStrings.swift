@@ -106,7 +106,7 @@ enum L10n {
         "Bring the board and the panels back in front of you.": "Bringt Spielbrett und Fenster wieder vor dich.",
         "Recenter board": "Brett neu ausrichten",
         "Reset workspace": "Arbeitsplatz zurücksetzen",
-        "Recenter puts the board 1.0 m ahead of you and keeps its size. Reset also restores the default size and map zoom.": "Neu ausrichten setzt das Brett 1,0 m vor dich und behält die Größe. Zurücksetzen stellt auch Standardgröße und Kartenzoom wieder her.",
+        "Recenter puts the board 1.25 m ahead of you and keeps its size. Reset also restores the default size and map zoom.": "Neu ausrichten setzt das Brett 1,25 m vor dich und behält die Größe. Zurücksetzen stellt auch Standardgröße und Kartenzoom wieder her.",
         "Move the board with a pinch-drag on the grab bar at its near edge. Use both hands to move, turn and scale it at once. Pan the map with a pinch-drag on the rim.": "Verschiebe das Brett mit Pinch und Ziehen an der Griffleiste am vorderen Rand. Mit beiden Händen bewegst, drehst und skalierst du es zugleich. Die Karte verschiebst du mit Pinch und Ziehen am Rand.",
         "Board size, distance and height presets": "Voreinstellungen für Größe, Abstand und Höhe",
         "Not available yet: the interaction layer only exposes Recenter and Reset. Resize with the two-hand pinch on the grab bar.": "Noch nicht verfügbar: Die Interaktionsschicht bietet nur Neu ausrichten und Zurücksetzen. Größe per Zwei-Hand-Pinch an der Griffleiste ändern.",

@@ -357,7 +357,7 @@ struct VisionLayoutInput {
 	bool planarWorld = false;         // Tabletop without stereo: the world texture is drawn planar on the board
 	bool boardPlaced = false;
 	XrSurface board;
-	float boardAspect = 9.0f / 16.0f;
+	float boardAspect = 1.0f; // square table (VisionHostState::boardAspect)
 	bool screenKnown = false;         // the upright screen anchor exists (first tracked frame)
 	XrSurface screen;
 	bool expandedUI = false;

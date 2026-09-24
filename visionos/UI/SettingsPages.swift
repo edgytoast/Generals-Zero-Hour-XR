@@ -41,7 +41,7 @@ private struct WorkspacePage: View {
                 Row { Button { InteractionControls.resetWorkspace() } label: {
                     Label(store.t("Reset workspace"), systemImage: "arrow.counterclockwise").frame(maxWidth: .infinity, alignment: .leading)
                 } }
-                Caption(text: store.t("Recenter puts the board 1.0 m ahead of you and keeps its size. Reset also restores the default size and map zoom."))
+                Caption(text: store.t("Recenter puts the board 1.25 m ahead of you and keeps its size. Reset also restores the default size and map zoom."))
                 Caption(text: store.t("Move the board with a pinch-drag on the grab bar at its near edge. Use both hands to move, turn and scale it at once. Pan the map with a pinch-drag on the rim."))
             }
             Section(store.t("Board size, distance and height presets")) {
