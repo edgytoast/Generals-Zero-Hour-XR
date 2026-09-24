@@ -77,7 +77,8 @@ typedef enum XRInteractionCommand {
     XR_CMD_ENTER_GROUND_VIEW = 6,      /* arm Ground View (teleport target is chosen by pinch) */
     XR_CMD_EXIT_GROUND_VIEW = 7,       /* leave Ground View, back to the unchanged tabletop */
     XR_CMD_ROTATE_PLACEMENT_STEP = 8,  /* value = degrees (signed): button/keyboard rotation of the ghost */
-    XR_CMD_ENGINE_BACK = 9             /* Escape/Back key into the engine (menus, dialogs) */
+    XR_CMD_ENGINE_BACK = 9,            /* Escape/Back key into the engine (menus, dialogs) */
+    XR_CMD_ZOOM_STEP = 10              /* value = percent (signed): map zoom step (more map on the table when positive) */
 } XRInteractionCommand;
 
 typedef struct XRRay {

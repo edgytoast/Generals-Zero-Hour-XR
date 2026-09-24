@@ -114,6 +114,8 @@ enum InteractionControls {
     static func cancelPlacement() { GXXRInputPostCommand(Int32(GXXRCommandCancelPlacement), 0) }
     static func cancelAll() { GXXRInputPostCommand(Int32(GXXRCommandCancelAll), 0) }
     static func recenterBoard() { GXXRInputPostCommand(Int32(GXXRCommandRecenterBoard), 0) }
+    /// Map zoom by `percent` (signed): positive shows more of the map on the same table.
+    static func zoomMap(percent: Int) { GXXRInputPostCommand(Int32(GXXRCommandZoomStep), Int32(percent)) }
     static func resetWorkspace() { GXXRInputPostCommand(Int32(GXXRCommandResetWorkspace), 0) }
     static func enterGroundView() { GXXRInputPostCommand(Int32(GXXRCommandEnterGroundView), 0) }
     static func exitGroundView() { GXXRInputPostCommand(Int32(GXXRCommandExitGroundView), 0) }

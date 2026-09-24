@@ -356,6 +356,49 @@ static void testInitialPlacementProposal() {
 
 // Gaze aim assist: a select / order pinch with a gaze ray asks for the assisted pick at the configured angle; a pointer
 // device (mouse, trackpad, test pointer ray) is exact and asks for none.
+// Headset ray shape (Vision Pro, visionOS 27): the selection ray starts ON the content (near the table), and may point back
+// toward the player. Both must pick the same board point as an eye ray; the pick must start at the head.
+static void testGazeRayFromContent() {
+	for (int reversed = 0; reversed < 2; ++reversed) {
+		Sim s;
+		const XrVector3f target = visionBoardToWorld(s.host.board, {0.2f, 0.1f, 0});
+		s.beginAtBoard(1, XR_HAND_RIGHT, 0.2f, 0.1f, H0());
+		XrVector3f d = xrSub(target, kHead);
+		const float l = xrLength(d);
+		d = {d.x / l, d.y / l, d.z / l};
+		const XrVector3f o = xrAdd(target, xrScale(d, reversed ? 0.03f : -0.04f)); // a few cm off the board, on the gaze line
+		if (reversed) d = xrScale(d, -1.0f);
+		s.queue.back().ray_world.origin = {o.x, o.y, o.z};
+		s.queue.back().ray_world.direction = {d.x, d.y, d.z};
+		s.frame();
+		CHECK(s.out.mode == VisionMode::Select);
+		const auto picks = s.bridge.of(C::Pick);
+		CHECK(picks.size() >= 1);
+		if (!picks.empty()) {
+			VNEAR(picks[0].aim.position, kHead);
+			const XrVector3f expect = xrScale(xrSub(target, kHead), 1.0f / l);
+			VNEAR(xrRotate(picks[0].aim.orientation, {0, 0, -1}), expect);
+		}
+	}
+}
+
+// Zoom buttons: XR_CMD_ZOOM_STEP scales the map zoom by the given percent, clamped to the configured range.
+static void testZoomStep() {
+	Sim s;
+	s.frames(2);
+	const float z0 = s.host.worldZoom;
+	XRInteractionEvent c = {};
+	c.type = XR_EVENT_COMMAND; c.command = XR_CMD_ZOOM_STEP; c.command_value = 25;
+	s.queue.push_back(c);
+	s.frame();
+	CHECK(s.out.worldZoomChanged);
+	NEAR(s.out.worldZoom, z0 * 1.25f);
+	for (int i = 0; i < 20; ++i) { c.command_value = 25; s.queue.push_back(c); s.frame(); }
+	NEAR(s.out.worldZoom, VisionConfig().zoomMax);
+	for (int i = 0; i < 40; ++i) { c.command_value = -20; s.queue.push_back(c); s.frame(); }
+	NEAR(s.out.worldZoom, VisionConfig().zoomMin);
+}
+
 static void testGazeAimAssist() {
 	{
 		Sim s;
@@ -2166,6 +2209,8 @@ static void testFrameDriver() {
 int main() {
 	testHelpers();
 	testInitialPlacementProposal();
+	testGazeRayFromContent();
+	testZoomStep();
 	testGazeAimAssist();
 	testSelect();
 	testAdditive();

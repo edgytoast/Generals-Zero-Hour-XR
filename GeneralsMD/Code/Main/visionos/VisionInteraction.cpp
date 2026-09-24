@@ -27,6 +27,19 @@ namespace {
 constexpr float kPi = 3.14159265358979f;
 
 inline bool finite3(XrVector3f v) { return std::isfinite(v.x + v.y + v.z); }
+// visionOS reports the selection ray of a look-and-pinch on Metal content with its origin ON the content (where the gaze met
+// the layer's depth, near the table) and a direction that may point back toward the viewer (seen on a Vision Pro, visionOS
+// 27, 2026-09-24: origins at the board centre depth, 0.7 m from the head, about half of them pointing at the player). The
+// gaze is the LINE through that point; re-anchor it at the line's point closest to the head and point it away from the head,
+// which is the eye ray every consumer here expects. A ray that already starts at the head is unchanged.
+void gazeLineFromHead(XrVector3f head, XrVector3f &o, XrVector3f &d) {
+	if (!finite3(head)) return;
+	const XrVector3f rel = xrSub(o, head);
+	float along = xrDot(rel, d);
+	if (along < 0) { d = xrScale(d, -1.0f); along = -along; }
+	o = xrSub(o, xrScale(d, along));
+}
+
 inline XrVector3f norm3(XrVector3f v) {
 	const float l = xrLength(v);
 	return l > 1e-9f && std::isfinite(l) ? xrScale(v, 1.0f / l) : XrVector3f{0, 0, 0};
@@ -446,8 +459,11 @@ void VisionInteraction::assignPosition(Ptr &p, const XRInteractionEvent &ev, boo
 	}
 	if (begin) { p.pos0 = p.pos; p.rot0 = p.rot; }
 	if (ev.has_current_ray && !begin) {
-		const XrVector3f o = fromXR(ev.current_ray.origin), d = norm3(fromXR(ev.current_ray.direction));
-		if (finite3(o) && xrLength(d) > 0.5f) { p.hasCurrentRay = true; p.curRayO = o; p.curRayD = d; }
+		XrVector3f o = fromXR(ev.current_ray.origin), d = norm3(fromXR(ev.current_ray.direction));
+		if (finite3(o) && xrLength(d) > 0.5f) {
+			gazeLineFromHead(host_.head.position, o, d);
+			p.hasCurrentRay = true; p.curRayO = o; p.curRayD = d;
+		}
 	}
 	p.travel = std::max(p.travel, xrLength(xrSub(p.pos, p.pos0)));
 	p.tsLast = ev.timestamp_s;
@@ -476,8 +492,11 @@ bool VisionInteraction::beginPointer(const XRInteractionEvent &ev) {
 	assignPosition(*p, ev, true);
 	p->travel = 0;
 	if (ev.has_ray) {
-		const XrVector3f o = fromXR(ev.ray_world.origin), d = norm3(fromXR(ev.ray_world.direction));
-		if (finite3(o) && xrLength(d) > 0.5f) { p->hasRay = true; p->rayO = o; p->rayD = d; }
+		XrVector3f o = fromXR(ev.ray_world.origin), d = norm3(fromXR(ev.ray_world.direction));
+		if (finite3(o) && xrLength(d) > 0.5f) {
+			gazeLineFromHead(host_.head.position, o, d);
+			p->hasRay = true; p->rayO = o; p->rayD = d;
+		}
 	}
 	// The amplification model needs the EYE as its origin. If the platform's ray starts at the head use it, otherwise
 	// (a ray that starts at the hand) use the tracked head so the head->hand direction never degenerates.
@@ -646,6 +665,12 @@ void VisionInteraction::handleCommand(int cmd, int value) {
 		if (observer_.mode == XrObserverMode::Armed) exitGround(false);
 		break;
 	case XR_CMD_RECENTER_BOARD: recenterRequested_ = true; break;
+	case XR_CMD_ZOOM_STEP: {
+		// Button alternative to the two-hand spread: + shows more map on the same table, - shows less.
+		const float zoom = clampf(worldZoom_ * (1.0f + float(value) / 100.0f), cfg_.zoomMin, cfg_.zoomMax);
+		if (zoom != worldZoom_) { worldZoom_ = zoom; zoomDirty_ = true; }
+		break;
+	}
 	case XR_CMD_RESET_WORKSPACE: resetWorkspaceRequested_ = true; break;
 	case XR_CMD_ENTER_GROUND_VIEW:
 		if (host_.engine.canObserveGround && observer_.mode == XrObserverMode::Off) {

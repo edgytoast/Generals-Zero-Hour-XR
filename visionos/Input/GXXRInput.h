@@ -43,7 +43,8 @@ enum {
     GXXRCommandEnterGroundView = 6,
     GXXRCommandExitGroundView = 7,
     GXXRCommandRotatePlacementStep = 8,  // value = degrees, signed
-    GXXRCommandEngineBack = 9
+    GXXRCommandEngineBack = 9,
+    GXXRCommandZoomStep = 10             // value = percent, signed: map zoom step
 };
 
 // Flush reasons.
