@@ -1160,7 +1160,9 @@ void VisionInteraction::updateBox(Ptr &p, const XrWorldHit &hit) {
 }
 
 void VisionInteraction::startBox(Ptr &p) {
-	// The engine press happens at the FROZEN start ray so its ground corner is exactly what was gazed at.
+	// The engine press happens at the FROZEN start ray so its ground corner is exactly what was gazed at (not where a
+	// refinement nudge had moved the select pick before the hand travelled far enough to make this a box).
+	if (p.refined) { p.startAim = p.gazeAim; p.startHit = p.gazeHit; p.startLocal = p.gazeLocal; p.refined = false; }
 	XrWorldHit hit;
 	if (!enginePick(p.startAim, hit)) { p.role = Role::Consumed; engineNeutral(); return; }
 	engineSpatialPointer(true);
@@ -1192,7 +1194,32 @@ void VisionInteraction::tickSelect(Ptr &p) {
 	if (rayDriven ? p.travel > cfg_.dragThresholdM : ev == XrTriggerEvent::Drag) {
 		startBox(p);
 		if (p.role == Role::Box) tickBox(p);
+		return;
 	}
+	if (!rayDriven && p.pickedStart) refineSelect(p);
+}
+
+// Hand refinement: look roughly, then nudge. The hand cursor (amplified head->hand ray on the board plane) moves with small
+// hand motions; the pick, the engine pointer, the preview ring and the tap all follow it. Gaze is good to ~1.5 degrees, a
+// unit is often smaller, and this lets the player land the ring on the unit before letting go.
+void VisionInteraction::refineSelect(Ptr &p) {
+	const XrVector3f last = p.refined ? p.refinedPoint : p.cursor.start;
+	if (xrLength(xrSub(p.cursorPoint, last)) < cfg_.refineStepM) return;
+	const XrVector3f eye = p.startAim.position;
+	const XrVector3f dir = norm3(xrSub(p.cursorPoint, eye));
+	if (!(xrLength(dir) > 0.5f)) return;
+	const XrPosef previous = p.startAim;
+	if (!p.refined) { p.gazeAim = p.startAim; p.gazeHit = p.startHit; p.gazeLocal = p.startLocal; }
+	p.startAim = visionAimFromRay(eye, dir);
+	XrWorldHit hit;
+	if (!engineSelectPick(p, hit)) { p.startAim = previous; return; }
+	p.refined = true;
+	p.refinedPoint = p.cursorPoint;
+	p.startHit = hit;
+	p.startLocal = visionBoardToLocal(board_, hit.room);
+	engineSpatialPointer(true);
+	enginePointer(true, hit.x, hit.y, false);
+	p.preview = engineIntent();
 }
 
 void VisionInteraction::tickBox(Ptr &p) {

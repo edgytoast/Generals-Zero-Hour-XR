@@ -399,6 +399,28 @@ static void testZoomStep() {
 	NEAR(s.out.worldZoom, VisionConfig().zoomMin);
 }
 
+// Hand refinement: a small hand move (under the 2 cm box threshold) re-aims the select pick at the hand cursor; the tap is
+// sent at the refined point, not at the original gaze point.
+static void testHandRefinement() {
+	Sim s;
+	s.beginAtBoard(1, XR_HAND_RIGHT, 0.1f, 0.05f, H0());
+	s.frame();
+	const size_t picks0 = s.bridge.of(C::Pick).size();
+	const XrVector3f dir0 = xrRotate(s.bridge.of(C::Pick).back().aim.orientation, {0, 0, -1});
+	for (int i = 1; i <= 6; ++i) { s.move(1, XR_HAND_RIGHT, plus(H0(), 0.0025f * i, 0, 0)); s.frame(); } // 1.5 cm right
+	CHECK(s.out.mode == VisionMode::Select); // still a select, not a box
+	const auto picks = s.bridge.of(C::Pick);
+	CHECK(picks.size() > picks0);
+	const XrVector3f dir1 = xrRotate(picks.back().aim.orientation, {0, 0, -1});
+	CHECK(dir1.x > dir0.x + 0.005f); // re-aimed toward the moved cursor
+	VNEAR(picks.back().aim.position, kHead);
+	s.end(1, XR_HAND_RIGHT, plus(H0(), 0.015f, 0, 0));
+	s.frames(2);
+	CHECK(s.out.events & kVisionEventTap || s.bridge.count(C::Pointer) > 0);
+	const XrVector3f dirTap = xrRotate(s.bridge.of(C::Pick).back().aim.orientation, {0, 0, -1});
+	VNEAR(dirTap, dir1); // the tap used the refined aim
+}
+
 static void testGazeAimAssist() {
 	{
 		Sim s;
@@ -2211,6 +2233,7 @@ int main() {
 	testInitialPlacementProposal();
 	testGazeRayFromContent();
 	testZoomStep();
+	testHandRefinement();
 	testGazeAimAssist();
 	testSelect();
 	testAdditive();

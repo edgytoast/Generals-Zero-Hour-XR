@@ -42,6 +42,9 @@ struct VisionConfig {
 	// a gaze pick that lands beside an object snaps to the nearest one within this angle. 0 disables. Pointer devices
 	// (mouse, trackpad, test input with a pointer ray) are exact and never assisted.
 	float gazeAssistRadians = 0.0262f; // 1.5 degrees
+	// Hand refinement: while a select pinch is held (before it becomes a box), the pick follows the hand cursor, so a
+	// small hand movement corrects a gaze pick that landed beside the target. Re-aimed when the cursor moved this far.
+	float refineStepM = 0.003f;
 	float cursorFallbackGain = 2.5f;      // board-plane travel per metre of hand travel when no eye ray is known
 	float minHeadHandDistanceM = 0.12f;   // closer than this the head->hand ray is degenerate
 
@@ -377,6 +380,11 @@ private:
 		bool pickedStart = false;
 		XrWorldHit startHit;
 		VisionIntentPreview preview; // what releasing this pinch as a tap will do (select role)
+		XrVector3f refinedPoint = {}; // hand refinement: the board-plane cursor point the pick was last re-aimed at
+		bool refined = false;
+		XrPosef gazeAim = {};          // the original gaze aim, hit and board point, kept for a box that starts after refinement
+		XrWorldHit gazeHit;
+		XrVector3f gazeLocal = {};
 		XrVector3f startLocal = {};    // press hit in board space (metres)
 		bool boxAdditive = false;
 		// panel bookkeeping
@@ -463,7 +471,8 @@ private:
 
 	// -- engine calls (tracked so cancel/flush are always balanced) --
 	bool enginePick(const XrPosef &aim, XrWorldHit &hit);
-	bool engineSelectPick(const Ptr &p, XrWorldHit &hit); // the start pick of a select / order pinch, with gaze aim assist
+	bool engineSelectPick(const Ptr &p, XrWorldHit &hit);
+	void refineSelect(Ptr &p); // the start pick of a select / order pinch, with gaze aim assist
 	void enginePointer(bool active, float x, float y, bool select);
 	void engineSpatialPointer(bool active);
 	void engineTrigger(bool down, bool available, bool additive);
