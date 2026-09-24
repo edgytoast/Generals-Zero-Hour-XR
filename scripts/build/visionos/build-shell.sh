@@ -4,9 +4,11 @@
 #   build-shell.sh simulator|device [--derived-data DIR] [--configuration Debug|Release] [--clean] [--no-build-engine]
 #
 #   simulator  xrsimulator SDK, runs in the visionOS simulator (no signing needed)
-#   device     xros SDK, UNSIGNED compile-only check (CODE_SIGNING_ALLOWED=NO); the resulting
-#              .app cannot be installed on a headset. For a signed build open the generated
-#              project in Xcode and set your team, or pass DEVELOPMENT_TEAM=... in the environment.
+#   device     xros SDK. Without DEVELOPMENT_TEAM: an UNSIGNED compile-only check (CODE_SIGNING_ALLOWED=NO)
+#              that cannot be installed on a headset. With DEVELOPMENT_TEAM=<your team id> in the environment:
+#              a signed development build (automatic signing, -allowProvisioningUpdates). Add
+#              GX_DEVICE_ID=<headset UDID from `xcrun devicectl list devices`> so Xcode can register the headset
+#              in your team's provisioning profile.
 #
 # ANGLE (GLES 3.0 on Metal) must be built first with scripts/build/visionos/build-angle.sh. The install
 # root defaults to build-angle.sh's default; override it with GX_ANGLE_ROOT=/path/to/angle/install.
@@ -96,7 +98,15 @@ if [[ "$MODE" == "simulator" ]]; then
   SIGN_ARGS=()
 else
   SDK="xros"; DEST="generic/platform=visionOS"; PRODUCTS="$CONFIG-xros"
-  SIGN_ARGS=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="")
+  if [[ -n "${DEVELOPMENT_TEAM:-}" ]]; then
+    SIGN_ARGS=(DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" CODE_SIGN_STYLE=Automatic -allowProvisioningUpdates)
+    if [[ -n "${GX_DEVICE_ID:-}" ]]; then
+      DEST="id=$GX_DEVICE_ID"
+      SIGN_ARGS+=(-allowProvisioningDeviceRegistration)
+    fi
+  else
+    SIGN_ARGS=(CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="")
+  fi
 fi
 
 # ---- UI fonts ---------------------------------------------------------------------------------
