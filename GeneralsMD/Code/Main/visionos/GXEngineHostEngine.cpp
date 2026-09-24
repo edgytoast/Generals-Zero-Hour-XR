@@ -189,6 +189,19 @@ bool GXEngineHostEngine_Frame(GXHostFrame *frame, GXHostFrameOutput *output)
 	VisionPresentationInput in = makeInput(&frame->info);
 	s_presentation.finish(post, *s_driver, s_plan.world, in, *output);
 	if (s_presentation.consumeRequireFullWorld()) d3d8gles_RequireXRFullWorld();
+	// Gaze targets for the system hover highlight (tabletop only: finish() zeroed the output, so the count starts at 0).
+	if (output->stereoValid && !output->groundView) {
+		static XrGazeTarget targets[GX_HOST_MAX_GAZE_TARGETS];
+		const int n = XrGameBoot_CollectGazeTargets(targets, GX_HOST_MAX_GAZE_TARGETS);
+		for (int i = 0; i < n; ++i) {
+			GXHostGazeTarget &g = output->gazeTargets[i];
+			g.objectID = targets[i].objectID;
+			g.position[0] = targets[i].room.x; g.position[1] = targets[i].room.y; g.position[2] = targets[i].room.z;
+			g.radius = targets[i].radius;
+			g.own = targets[i].own;
+		}
+		output->gazeTargetCount = uint32_t(n);
+	}
 	static unsigned diagFrames = 0;
 	if ((diagFrames++ % 180) == 0) {
 		// Why a layer is or is not shown (the plan asks for it; the engine must also have produced its texture).

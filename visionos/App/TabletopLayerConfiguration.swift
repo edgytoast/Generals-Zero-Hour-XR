@@ -32,7 +32,7 @@ struct TabletopLayerConfiguration: CompositorLayerConfiguration {
         // cannot tell where the player looked (seen in the xrOS 27 simulator). The bridge marks the whole view as one area
         // each frame (GXXRBridge.mm, encodeTrackingAreas).
         let trackingFormats = capabilities.supportedTrackingAreasFormats
-        if let fmt = [MTLPixelFormat.r8Uint, .r16Uint].first(where: trackingFormats.contains) ?? trackingFormats.first {
+        if let fmt = [MTLPixelFormat.r16Uint, .r8Uint].first(where: trackingFormats.contains) ?? trackingFormats.first {
             configuration.trackingAreasFormat = fmt
             configuration.trackingAreasUsage = [.renderTarget, .shaderRead]
         }

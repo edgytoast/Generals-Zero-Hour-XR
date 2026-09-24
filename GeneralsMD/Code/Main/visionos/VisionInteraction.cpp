@@ -220,6 +220,7 @@ VisionInteraction::Ptr *VisionInteraction::other(const Ptr *p) {
 bool VisionInteraction::engineSelectPick(const Ptr &p, XrWorldHit &hit) {
 	if (!bridge_) return false;
 	engineTouched_ = true;
+	if (p.area >= kVisionGazeAreaBase && bridge_->PickObject(p.area - kVisionGazeAreaBase, p.startAim, hit)) return true;
 	const float assist = p.kind == XR_POINTER_DEVICE ? 0.0f : cfg_.gazeAssistRadians;
 	return bridge_->PickWorldAssisted(board_, p.startAim, hit, assist);
 }
@@ -809,6 +810,19 @@ VisionInteraction::Target VisionInteraction::classify(const Ptr &p, uint32_t are
 			best.planePoint = plane;
 		}
 	}
+	// Object tracking area: the system saw the player look at that object (its own gaze test, visionOS 26). It wins over the
+	// ray's board/rim/none answer, not over a panel the ray hit in front of it.
+	if (area >= kVisionGazeAreaBase && best.kind != Kind::Panel && host_.boardVisible && boardInit_ && bridge_ &&
+		observer_.mode == XrObserverMode::Off) {
+		XrWorldHit h;
+		if (bridge_->PickObject(area - kVisionGazeAreaBase, p.hasRay ? visionAimFromRay(p.rayO, p.rayD) : visionAimFromRay(host_.head.position, {0, 0, -1}), h)) {
+			best = Target();
+			best.kind = Kind::Board;
+			best.t = h.distance;
+			best.planePoint = h.room;
+			return best;
+		}
+	}
 	// Tracking-area hint: the system did the gaze test itself (visionOS 26) and named the region.
 	if (best.kind == Kind::None && area != 0 && host_.boardVisible && boardInit_) {
 		if (area == kVisionRegionGrabBar) best.kind = Kind::GrabBar;
@@ -1209,10 +1223,12 @@ void VisionInteraction::refineSelect(Ptr &p) {
 	const XrVector3f dir = norm3(xrSub(p.cursorPoint, eye));
 	if (!(xrLength(dir) > 0.5f)) return;
 	const XrPosef previous = p.startAim;
+	const uint32_t previousArea = p.area;
+	p.area = 0; // a nudge means "not quite that one": follow the hand cursor, not the object the system named
 	if (!p.refined) { p.gazeAim = p.startAim; p.gazeHit = p.startHit; p.gazeLocal = p.startLocal; }
 	p.startAim = visionAimFromRay(eye, dir);
 	XrWorldHit hit;
-	if (!engineSelectPick(p, hit)) { p.startAim = previous; return; }
+	if (!engineSelectPick(p, hit)) { p.startAim = previous; p.area = previousArea; return; }
 	p.refined = true;
 	p.refinedPoint = p.cursorPoint;
 	p.startHit = hit;

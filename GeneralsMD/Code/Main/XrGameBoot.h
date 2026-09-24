@@ -206,6 +206,15 @@ bool XrGameBoot_PickWorld(const XrSurface &board,const XrPosef &aim,XrWorldHit &
 // hit distance). Eye tracking is good to about 1-1.5 degrees; units on a 1 m table are 1-2 cm, so a plain gaze pick lands
 // beside the unit about as often as on it. Not applied while a building or an armed command is being placed.
 bool XrGameBoot_PickWorldAssisted(const XrSurface &board,const XrPosef &aim,XrWorldHit &hit,float assistRadians);
+// GeneralsX @feature visionOS 24/09/2026 Gaze targets for visionOS tracking areas: the selectable, visible objects on the
+// table this frame, own units first. `room` is the centre of the object's body in room space, `radius` its gaze-target
+// radius on the table in metres (never below 1.2 cm, so small units stay lookable). The compositor draws one tracking area
+// per target and the system highlights the one the player looks at; a pinch then names the object directly.
+struct XrGazeTarget {unsigned objectID=0;XrVector3f room={};float radius=0;int own=0;};
+int XrGameBoot_CollectGazeTargets(XrGazeTarget *out,int max);
+// The pick for a pinch the system attributed to an object's tracking area: the object itself, no ray. False when the
+// object is gone, hidden or off the table.
+bool XrGameBoot_PickObject(unsigned objectID,const XrPosef &aim,XrWorldHit &hit);
 void XrGameBoot_SpatialPointer(bool active);
 void XrGameBoot_SpatialClick(bool cancel);
 unsigned int XrGameBoot_WorldTexture();

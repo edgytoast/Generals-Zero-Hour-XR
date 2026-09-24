@@ -185,3 +185,25 @@ fragment float4 fade_fragment(CompositeOut in [[stage_in]],
     float3 rgb = srgbToLinear(p.color.rgb);
     return float4(rgb * p.color.a, p.color.a);
 }
+
+// ---- Gaze tracking areas (visionOS 26): write a tracking-area render value into the r16Uint tracking-areas texture. The
+// value rides in GXXRFlatVertex.color[0] (exact for any 16-bit value). GXXRBridge.mm encodeTrackingAreas draws one camera-
+// facing disc per object on the table; the system highlights the area the player looks at and names it in the pinch.
+struct TrackOut {
+    float4 position [[position]];
+    uint value [[flat]];
+};
+
+vertex TrackOut track_vertex(uint vid [[vertex_id]],
+                             const device GXXRFlatVertex* verts [[buffer(GXXRBufferIndexVertices)]],
+                             constant GXXRFlatUniforms& u [[buffer(GXXRBufferIndexUniforms)]]) {
+    const device GXXRFlatVertex& v = verts[vid];
+    TrackOut out;
+    out.position = u.clipFromWorld * float4(v.position[0], v.position[1], v.position[2], 1.0);
+    out.value = uint(v.color[0] + 0.5);
+    return out;
+}
+
+fragment uint4 track_fragment(TrackOut in [[stage_in]]) {
+    return uint4(in.value, 0, 0, 0);
+}

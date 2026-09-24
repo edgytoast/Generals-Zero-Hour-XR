@@ -52,6 +52,8 @@ public:
 	// in room space. Returns false when the ray misses the board volume or the engine is not ready.
 	virtual bool PickWorld(const XrSurface &board, const XrPosef &aim, XrWorldHit &hit) = 0;
 	// PickWorld with gaze aim assist: snap onto a selectable object within `assistRadians` (XrGameBoot_PickWorldAssisted).
+	// The pick for a pinch the system attributed to an object's tracking area (XrGameBoot_PickObject): the object, no ray.
+	virtual bool PickObject(unsigned objectID, const XrPosef &aim, XrWorldHit &hit) { (void)objectID; (void)aim; (void)hit; return false; }
 	virtual bool PickWorldAssisted(const XrSurface &board, const XrPosef &aim, XrWorldHit &hit, float assistRadians) {
 		(void)assistRadians;
 		return PickWorld(board, aim, hit);

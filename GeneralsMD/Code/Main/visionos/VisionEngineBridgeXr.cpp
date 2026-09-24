@@ -38,6 +38,9 @@ public:
 	bool PickWorld(const XrSurface &board, const XrPosef &aim, XrWorldHit &hit) override {
 		return XrGameBoot_PickWorld(board, aim, hit);
 	}
+	bool PickObject(unsigned objectID, const XrPosef &aim, XrWorldHit &hit) override {
+		return XrGameBoot_PickObject(objectID, aim, hit);
+	}
 	bool PickWorldAssisted(const XrSurface &board, const XrPosef &aim, XrWorldHit &hit, float assistRadians) override {
 		return XrGameBoot_PickWorldAssisted(board, aim, hit, assistRadians);
 	}

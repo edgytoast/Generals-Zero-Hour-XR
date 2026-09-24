@@ -336,7 +336,12 @@ static void GXXRDebugDumpTexture(id<MTLCommandBuffer> cb, id<MTLTexture> tex, NS
     id<MTLDevice> _device;
     id<MTLCommandQueue> _queue;
     GXXRMetalRenderer* _renderer;
-    GXXRFeedbackRenderer* _feedbackRenderer;  // box-select rect, grab bar, cursor, placement/ground reticles, comfort fade
+    GXXRFeedbackRenderer* _feedbackRenderer;
+    // Gaze targets of the frame being composited (GXHostFrameOutput.gazeTargets) and the pipeline that writes their
+    // tracking-area values (built on first use for the layer's tracking-areas format).
+    std::vector<GXHostGazeTarget> _gazeTargets;
+    id<MTLRenderPipelineState> _trackPipeline;
+    MTLPixelFormat _trackFormat;  // box-select rect, grab bar, cursor, placement/ground reticles, comfort fade
     GXXRTestScene* _testScene;
 
     // Engine mode (engine thread + decoupled compositor). Metal side only: no GL on this thread, ever.
@@ -847,7 +852,8 @@ static void GXXRDebugDumpTexture(id<MTLCommandBuffer> cb, id<MTLTexture> tex, NS
     }
     const CFTimeInterval tComp1 = CACurrentMediaTime();
 
-    [self encodeTrackingAreas:drawable commandBuffer:cb];
+    _gazeTargets.clear();
+    [self encodeTrackingAreas:drawable commandBuffer:cb info:info];
     cp_drawable_encode_present(drawable, cb);
     [cb commit];
     if (result != XR_FRAME_SKIP) (*presented)++;
@@ -870,16 +876,42 @@ static void GXXRDebugDumpTexture(id<MTLCommandBuffer> cb, id<MTLTexture> tex, NS
 
 /// Engine mode: publish this display frame's head/eye snapshot to the engine thread, then composite the LATEST COMPLETED
 /// engine frame (or the loading indicator when there is none). Never waits for the engine, never touches GL.
-// Marks every pixel of every view as one tracking area (visionOS 26). A look-and-pinch on Metal content is attributed to
-// the tracking area under the gaze; with no area drawn the system sends indirect pinches with a zero selection ray, so
-// the interaction layer cannot aim at the board. The tabletop and its panels are all one area: the interaction layer
-// does its own hit testing from the ray.
-- (void)encodeTrackingAreas:(cp_drawable_t)drawable commandBuffer:(id<MTLCommandBuffer>)cb {
+// Tracking areas (visionOS 26). Every pixel of every view is one base area (so a look-and-pinch anywhere on our content is
+// attributed to the app), and each object on the table (GXHostFrameOutput.gazeTargets) gets its own area, drawn as a small
+// disc facing the eye, with the system's automatic hover effect: the system highlights the object the player looks at
+// (the app never learns the gaze) and names its area in the pinch (GX_GAZE_AREA_BASE + object id).
+- (id<MTLRenderPipelineState>)trackPipelineForFormat:(MTLPixelFormat)format {
+    if (_trackPipeline && _trackFormat == format) return _trackPipeline;
+    NSError* error = nil;
+    id<MTLLibrary> library = [_device newDefaultLibraryWithBundle:[NSBundle mainBundle] error:&error];
+    MTLRenderPipelineDescriptor* pd = [MTLRenderPipelineDescriptor new];
+    pd.label = @"GXXR tracking areas";
+    pd.vertexFunction = [library newFunctionWithName:@"track_vertex"];
+    pd.fragmentFunction = [library newFunctionWithName:@"track_fragment"];
+    pd.colorAttachments[0].pixelFormat = format;
+    _trackPipeline = pd.vertexFunction && pd.fragmentFunction ? [_device newRenderPipelineStateWithDescriptor:pd error:&error] : nil;
+    _trackFormat = format;
+    if (!_trackPipeline) os_log_error(Log(), "tracking-area pipeline unavailable: %{public}@", error.localizedDescription);
+    return _trackPipeline;
+}
+
+- (void)encodeTrackingAreas:(cp_drawable_t)drawable commandBuffer:(id<MTLCommandBuffer>)cb info:(const XRFrameInfo&)info {
     const size_t count = cp_drawable_get_tracking_areas_texture_count(drawable);
     if (count == 0) return;
     static const cp_tracking_area_identifier kTabletopArea = 1;
-    cp_tracking_area_t area = cp_drawable_add_tracking_area(drawable, kTabletopArea);
-    const cp_tracking_area_render_value value = cp_tracking_area_get_render_value(area);
+    const cp_tracking_area_render_value baseValue = cp_tracking_area_get_render_value(cp_drawable_add_tracking_area(drawable, kTabletopArea));
+
+    // One area per object: identifier = base + object id, automatic hover effect, render value for this frame.
+    struct Disc { simd_float3 centre; float radius; float value; };
+    std::vector<Disc> discs;
+    discs.reserve(_gazeTargets.size());
+    for (const GXHostGazeTarget& t : _gazeTargets) {
+        cp_tracking_area_t area = cp_drawable_add_tracking_area(drawable, (cp_tracking_area_identifier)(GX_GAZE_AREA_BASE + t.objectID));
+        if (!area) continue;
+        cp_tracking_area_add_automatic_hover_effect(area);
+        discs.push_back({simd_make_float3(t.position[0], t.position[1], t.position[2]), t.radius, (float)cp_tracking_area_get_render_value(area)});
+    }
+
     for (size_t i = 0; i < count; ++i) {
         id<MTLTexture> tex = cp_drawable_get_tracking_areas_texture(drawable, i);
         if (!tex) continue;
@@ -890,9 +922,49 @@ static void GXXRDebugDumpTexture(id<MTLCommandBuffer> cb, id<MTLTexture> tex, NS
             pass.colorAttachments[0].slice = slice;
             pass.colorAttachments[0].loadAction = MTLLoadActionClear;
             pass.colorAttachments[0].storeAction = MTLStoreActionStore;
-            pass.colorAttachments[0].clearColor = MTLClearColorMake((double)value, 0, 0, 0);
+            pass.colorAttachments[0].clearColor = MTLClearColorMake((double)baseValue, 0, 0, 0);
             id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:pass];
-            enc.label = @"GXXR tracking area";
+            enc.label = @"GXXR tracking areas";
+            id<MTLRenderPipelineState> pipeline = discs.empty() ? nil : [self trackPipelineForFormat:tex.pixelFormat];
+            for (uint32_t vi = 0; pipeline && vi < info.eye_count && vi < XR_MAX_EYES; ++vi) {
+                const XREyeView& e = info.eyes[vi];
+                if (e.texture_index != i || e.array_slice != slice) continue;
+                simd_float4x4 clipFromWorld, worldFromView;
+                memcpy(&clipFromWorld, e.clip_from_world, sizeof(clipFromWorld));
+                memcpy(&worldFromView, e.world_from_view, sizeof(worldFromView));
+                const simd_float3 eye = simd_make_float3(worldFromView.columns[3].x, worldFromView.columns[3].y, worldFromView.columns[3].z);
+                std::vector<GXXRFlatVertex> verts;
+                verts.reserve(discs.size() * 12 * 3);
+                for (const Disc& d : discs) {
+                    const simd_float3 toEye = simd_normalize(eye - d.centre);
+                    simd_float3 right = simd_cross(simd_make_float3(0, 1, 0), toEye);
+                    if (simd_length(right) < 1e-3f) right = simd_make_float3(1, 0, 0);
+                    right = simd_normalize(right);
+                    const simd_float3 up = simd_normalize(simd_cross(toEye, right));
+                    const int sides = 12;
+                    for (int k = 0; k < sides; ++k) {
+                        const float a0 = 2.0f * (float)M_PI * k / sides, a1 = 2.0f * (float)M_PI * (k + 1) / sides;
+                        const simd_float3 p0 = d.centre + (right * cosf(a0) + up * sinf(a0)) * d.radius;
+                        const simd_float3 p1 = d.centre + (right * cosf(a1) + up * sinf(a1)) * d.radius;
+                        for (simd_float3 q : {d.centre, p0, p1}) {
+                            GXXRFlatVertex v = {};
+                            v.position[0] = q.x; v.position[1] = q.y; v.position[2] = q.z;
+                            v.color[0] = d.value;
+                            verts.push_back(v);
+                        }
+                    }
+                }
+                id<MTLBuffer> buf = [_device newBufferWithBytes:verts.data() length:verts.size() * sizeof(GXXRFlatVertex) options:MTLResourceStorageModeShared];
+                MTLViewport vp = {(double)e.viewport.x, (double)e.viewport.y, (double)e.viewport.width, (double)e.viewport.height, 0.0, 1.0};
+                [enc setViewport:vp];
+                [enc setRenderPipelineState:pipeline];
+                [enc setCullMode:MTLCullModeNone];
+                GXXRFlatUniforms u = {};
+                u.clipFromWorld = clipFromWorld;
+                [enc setVertexBuffer:buf offset:0 atIndex:GXXRBufferIndexVertices];
+                [enc setVertexBytes:&u length:sizeof(u) atIndex:GXXRBufferIndexUniforms];
+                [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:verts.size()];
+            }
             [enc endEncoding];
         }
     }
@@ -925,6 +997,7 @@ static void GXXRDebugDumpTexture(id<MTLCommandBuffer> cb, id<MTLTexture> tex, NS
         else if (anchor) cp_drawable_set_device_anchor(drawable, anchor);
         const XRFrameInfo& pinfo = pf->info;
         const GXHostFrameOutput& out = pf->output;
+        _gazeTargets.assign(out.gazeTargets, out.gazeTargets + std::min<uint32_t>(out.gazeTargetCount, GX_HOST_MAX_GAZE_TARGETS));
         if (pf.seq != _lastCompositedSeq) {
             _lastCompositedSeq = pf.seq;
             _winNewFrames++;
@@ -1106,7 +1179,8 @@ static void GXXRDebugDumpTexture(id<MTLCommandBuffer> cb, id<MTLTexture> tex, NS
         (*presented)++;
     }
     (void)firstColor; (void)firstDepth; (void)firstSlice;
-    [self encodeTrackingAreas:drawable commandBuffer:cb];
+    if (!pf) _gazeTargets.clear();
+    [self encodeTrackingAreas:drawable commandBuffer:cb info:info];
     cp_drawable_encode_present(drawable, cb);
     _accComposite += (CACurrentMediaTime() - tComp0) * 1000.0;
 }

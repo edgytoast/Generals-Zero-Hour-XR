@@ -65,6 +65,16 @@ struct FakeBridge : VisionEngineBridge {
 	}
 	void Key(VisionKey key, bool down) override { Call k{C::Key}; k.i = int(key); k.f1 = down; calls.push_back(k); }
 	void RoutePointer(int target) override { Call k{C::Route}; k.i = target; calls.push_back(k); }
+	unsigned lastObject = 0;
+	int objectPicks = 0;
+	bool PickObject(unsigned objectID, const XrPosef &aim, XrWorldHit &hit) override {
+		(void)aim;
+		lastObject = objectID;
+		++objectPicks;
+		hit.room = visionBoardToWorld(lastBoard.width > 0 ? lastBoard : XrSurface(), {0.3f, -0.1f, 0});
+		hit.x = 900; hit.y = 400; hit.distance = 1.0f;
+		return objectID != 0;
+	}
 	float lastAssist = -1.0f;
 	int assistedPicks = 0;
 	bool PickWorldAssisted(const XrSurface &board, const XrPosef &aim, XrWorldHit &hit, float assistRadians) override {
@@ -419,6 +429,23 @@ static void testHandRefinement() {
 	CHECK(s.out.events & kVisionEventTap || s.bridge.count(C::Pointer) > 0);
 	const XrVector3f dirTap = xrRotate(s.bridge.of(C::Pick).back().aim.orientation, {0, 0, -1});
 	VNEAR(dirTap, dir1); // the tap used the refined aim
+}
+
+// Object tracking area: the system names the object the player looked at. Even when the ray would miss the board, the
+// pinch selects that object through PickObject (no ray pick at all).
+static void testObjectTrackingArea() {
+	Sim s;
+	s.frames(1);
+	s.bridge.lastBoard = s.host.board;
+	s.begin(1, XR_HAND_RIGHT, xrAdd(kHead, {0, 1.0f, -1.0f}), H0()); // looking up at the ceiling: the ray misses everything
+	s.queue.back().tracking_area_id = kVisionGazeAreaBase + 42;
+	s.frame();
+	CHECK(s.out.mode == VisionMode::Select);
+	CHECK(s.bridge.objectPicks >= 1 && s.bridge.lastObject == 42);
+	s.end(1, XR_HAND_RIGHT, H0());
+	s.frames(2);
+	CHECK(s.out.events & kVisionEventTap || s.bridge.objectPicks >= 2);
+	CHECK(s.bridge.lastObject == 42);
 }
 
 static void testGazeAimAssist() {
@@ -2234,6 +2261,7 @@ int main() {
 	testGazeRayFromContent();
 	testZoomStep();
 	testHandRefinement();
+	testObjectTrackingArea();
 	testGazeAimAssist();
 	testSelect();
 	testAdditive();

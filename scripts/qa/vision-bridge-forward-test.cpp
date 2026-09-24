@@ -34,6 +34,12 @@ bool XrGameBoot_PickWorld(const XrSurface &board, const XrPosef &aim, XrWorldHit
 	hit.x = 11; hit.y = 22; hit.distance = 3; hit.room = {4, 5, 6};
 	return g_ret;
 }
+bool XrGameBoot_PickObject(unsigned objectID, const XrPosef &aim, XrWorldHit &hit) {
+	recf("PickObject", objectID, aim.position.x);
+	hit.x = 55; hit.y = 66; hit.distance = 1; hit.room = {1, 2, 3};
+	return g_ret;
+}
+int XrGameBoot_CollectGazeTargets(XrGazeTarget *, int) { rec("CollectGazeTargets"); return 0; }
 bool XrGameBoot_PickWorldAssisted(const XrSurface &board, const XrPosef &aim, XrWorldHit &hit, float assistRadians) {
 	recf("PickWorldAssisted", board.width, aim.position.x, assistRadians);
 	hit.x = 33; hit.y = 44; hit.distance = 2; hit.room = {7, 8, 9};
@@ -114,6 +120,9 @@ int main() {
 	CHECK(b->PickWorldAssisted(board, aim, hit, 0.025f));
 	CHECK(hit.x == 33 && hit.y == 44 && hit.room.z == 9);
 	expectOnly("PickWorldAssisted(1.25,0.5,0.025,0,0,0)");
+	CHECK(b->PickObject(4242, aim, hit));
+	CHECK(hit.x == 55 && hit.y == 66 && hit.room.z == 3);
+	expectOnly("PickObject(4242,0.5,0,0,0,0)");
 	g_ret = true;
 
 	b->SpatialPointer(true);                 expectOnly("SpatialPointer(1,0,0,0,0,0)");

@@ -1164,6 +1164,7 @@ static XrVector3f s_triggerStart;
 static bool s_triggerPreview=false;
 static unsigned s_pickCounts[6]={}; // unavailable, outside board, terrain miss, projection, viewport, hit
 static unsigned s_assistSnaps=0; // gaze picks moved onto a nearby object (XrGameBoot_PickWorldAssisted)
+static unsigned s_areaPicks=0;   // pinches the system attributed to an object tracking area (XrGameBoot_PickObject)
 static bool s_renderReady=false;
 static CameraClass *s_renderCamera=nullptr;
 static float s_worldSpan=619;
@@ -1301,7 +1302,8 @@ void GX_XR_BeginStereoWorld() {
 			center.x,center.y,center.z,s_worldSpan,w,h,s_worldFrame.board.width,s_worldFrame.width,s_worldFrame.height);
 		GXLOG("P7.4 pointer picks unavailable=%u outside=%u terrain-miss=%u projection=%u viewport=%u hit=%u assist=%u",
 			s_pickCounts[0],s_pickCounts[1],s_pickCounts[2],s_pickCounts[3],s_pickCounts[4],s_pickCounts[5],s_assistSnaps);
-		memset(s_pickCounts,0,sizeof(s_pickCounts));s_assistSnaps=0;
+		if(s_areaPicks) GXLOG("P7.4 tracking-area picks=%u",s_areaPicks);
+		memset(s_pickCounts,0,sizeof(s_pickCounts));s_assistSnaps=0;s_areaPicks=0;
 		// Read-only engine collision probe. Unlike host spies this exercises
 		// the actual map, W3D terrain/model ray casting and screen projection.
 		const auto &surface=s_worldFrame.board;
@@ -1403,6 +1405,57 @@ bool XrGameBoot_PickWorldAssisted(const XrSurface &board,const XrPosef &aim,XrWo
 	s_pickPixel=pixel;s_pickRoom=bestRoom;
 	hit.room=bestRoom;hit.x=float(pixel.x);hit.y=float(pixel.y);hit.distance=xrLength(xrSub(bestRoom,aim.position));
 	++s_assistSnaps;
+	return true;
+}
+static bool xrGazeCandidate(Drawable *d) {
+	const Object *o=d ? d->getObject():nullptr;
+	return o && o->isSelectable() && !o->isEffectivelyDead() && !o->isContained() && !o->isOffMap() && !d->getFullyObscuredByShroud();
+}
+static XrVector3f xrRoomOf(const XrSurface &board,const Coord3D &p) {
+	const auto local=xrTransformPoint(s_worldMapping,{p.x,p.y,p.z});
+	return xrAdd(board.pose.position,xrRotate(board.pose.orientation,xrScale(local,board.width)));
+}
+int XrGameBoot_CollectGazeTargets(XrGazeTarget *out,int max) {
+	if(!out || max<=0 || !s_mappingReady || !XrGameBoot_CanStereoWorld() || !TheGameClient || !GX_XR_SplitUIAllowed()) return 0;
+	const XrSurface &board=s_worldFrame.board;
+	int count=0;
+	for(int pass=0;pass<2 && count<max;++pass) { // own units first: they are what a pinch selects
+		for(auto *d=TheGameClient->getDrawableList();d && count<max;d=d->getNextDrawable()) {
+			if(!xrGazeCandidate(d)) continue;
+			const Object *o=d->getObject();
+			const bool own=o->isLocallyControlled();
+			if(own!=(pass==0)) continue;
+			const Coord3D *p=d->getPosition();
+			const Real r=std::max<Real>(o->getGeometryInfo().getBoundingCircleRadius(),5.0f);
+			const Real h=std::max<Real>(o->getGeometryInfo().getMaxHeightAbovePosition(),r);
+			const Coord3D centre={p->x,p->y,p->z+h*0.5f};
+			if(!xrBoardContainsSphere(s_worldMapping,s_worldAspect,{centre.x,centre.y,centre.z},0)) continue;
+			const XrVector3f room=xrRoomOf(board,centre);
+			const XrVector3f edge=xrRoomOf(board,{centre.x+r,centre.y,centre.z});
+			XrGazeTarget &t=out[count++];
+			t.objectID=unsigned(o->getID());t.room=room;t.own=own ? 1:0;
+			t.radius=std::clamp(xrLength(xrSub(edge,room))*1.15f,0.012f,0.08f);
+		}
+	}
+	return count;
+}
+bool XrGameBoot_PickObject(unsigned objectID,const XrPosef &aim,XrWorldHit &hit) {
+	if(!s_mappingReady || !XrGameBoot_CanStereoWorld() || !TheGameLogic || !TheTacticalView || !GX_XR_SplitUIAllowed()) return false;
+	Object *o=TheGameLogic->findObjectByID(ObjectID(objectID));
+	Drawable *d=o ? o->getDrawable():nullptr;
+	if(!xrGazeCandidate(d)) return false;
+	const Coord3D *p=d->getPosition();
+	if(!xrBoardContainsSphere(s_worldMapping,s_worldAspect,{p->x,p->y,p->z},0)) return false;
+	ICoord2D pixel={640,288};
+	TheTacticalView->worldToScreen(p,&pixel);
+	int ox=0,oy=0;TheTacticalView->getOrigin(&ox,&oy);
+	pixel.x=std::clamp(pixel.x,ox+1,ox+TheTacticalView->getWidth()-2);
+	pixel.y=std::clamp(pixel.y,oy+1,oy+TheTacticalView->getHeight()-2);
+	const XrVector3f room=xrRoomOf(s_worldFrame.board,*p);
+	s_pickStart=Vector3(p->x,p->y,p->z+50.0f);s_pickEnd=Vector3(p->x,p->y,p->z);
+	s_pickPixel=pixel;s_pickAim=aim;s_pickRoom=room;
+	hit.room=room;hit.x=float(pixel.x);hit.y=float(pixel.y);hit.distance=xrLength(xrSub(room,aim.position));
+	++s_areaPicks;
 	return true;
 }
 // GeneralsX @feature Codex 17/09/2026 P25 terrain-only destination; never

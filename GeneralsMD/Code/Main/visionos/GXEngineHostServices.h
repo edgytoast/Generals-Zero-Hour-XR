@@ -70,6 +70,16 @@ typedef struct GXHostLayer {
     float uvRect[4];            /* x, y, w, h of the visible part of the target when GX_LAYER_HAS_UVRECT (control bar band, HUD, world crop) */
 } GXHostLayer;
 enum { GX_HOST_MAX_LAYERS = 8 };
+/* Gaze targets (visionOS tracking areas): one per selectable object on the table; the compositor draws each as a small disc
+ * in the tracking-areas texture with a system hover effect. Tracking-area identifier = GX_GAZE_AREA_BASE + objectID. */
+enum { GX_HOST_MAX_GAZE_TARGETS = 160 };
+#define GX_GAZE_AREA_BASE 0x01000000u
+typedef struct GXHostGazeTarget {
+    uint32_t objectID;
+    float position[3];          /* room space, centre of the object's body */
+    float radius;               /* metres */
+    int32_t own;                /* 1 = the player's own object */
+} GXHostGazeTarget;
 
 /* Screen-space and world-space feedback the compositor draws in Metal on top of the eyes and layers (package C2). Everything is world
  * space (room space, metres); the flags say which parts are valid. Built from VisionInteractionOutput by VisionFeedback.h. */
@@ -136,6 +146,8 @@ typedef struct GXHostFrameOutput {
     float focus[3];
     uint32_t layerCount;
     GXHostLayer layers[GX_HOST_MAX_LAYERS];
+    uint32_t gazeTargetCount;   /* tabletop only; 0 in menus, loading and Ground View */
+    GXHostGazeTarget gazeTargets[GX_HOST_MAX_GAZE_TARGETS];
 } GXHostFrameOutput;
 
 /* One engine-thread frame. `info` is the head/eye snapshot the frame renders for (its native handles are NULL). */

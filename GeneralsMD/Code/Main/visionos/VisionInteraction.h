@@ -161,6 +161,10 @@ struct VisionBoxRect {
 };
 
 // Pinch preview (TouchInput::TapIntent values): what releasing the current board pinch will do.
+// Tracking areas the compositor draws for objects on the table (GXEngineHostServices.h GX_GAZE_AREA_BASE): the area
+// identifier of a pinch at or above this base names the object the system saw the player look at (identifier - base).
+constexpr uint32_t kVisionGazeAreaBase = 0x01000000u;
+
 enum VisionIntent { kVisionIntentNone = 0, kVisionIntentSelect = 1, kVisionIntentMove = 2, kVisionIntentAttack = 3,
 	kVisionIntentInteract = 4, kVisionIntentDeselect = 5 };
 struct VisionIntentPreview {
