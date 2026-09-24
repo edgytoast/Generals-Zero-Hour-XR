@@ -1163,6 +1163,7 @@ static XrTriggerGesture s_triggerGesture;
 static XrVector3f s_triggerStart;
 static bool s_triggerPreview=false;
 static unsigned s_pickCounts[6]={}; // unavailable, outside board, terrain miss, projection, viewport, hit
+static unsigned s_assistSnaps=0; // gaze picks moved onto a nearby object (XrGameBoot_PickWorldAssisted)
 static bool s_renderReady=false;
 static CameraClass *s_renderCamera=nullptr;
 static float s_worldSpan=619;
@@ -1298,9 +1299,9 @@ void GX_XR_BeginStereoWorld() {
 			center.z,s_worldMaxHeight,s_worldSpan,gxXrBoardCeiling(s_worldMapping),kXrBoardUnderside);
 		GXLOG("P7.4 mapping center=(%.1f,%.1f,%.1f) span=%.1f viewport=%dx%d board=%.2fm eye=%dx%d",
 			center.x,center.y,center.z,s_worldSpan,w,h,s_worldFrame.board.width,s_worldFrame.width,s_worldFrame.height);
-		GXLOG("P7.4 pointer picks unavailable=%u outside=%u terrain-miss=%u projection=%u viewport=%u hit=%u",
-			s_pickCounts[0],s_pickCounts[1],s_pickCounts[2],s_pickCounts[3],s_pickCounts[4],s_pickCounts[5]);
-		memset(s_pickCounts,0,sizeof(s_pickCounts));
+		GXLOG("P7.4 pointer picks unavailable=%u outside=%u terrain-miss=%u projection=%u viewport=%u hit=%u assist=%u",
+			s_pickCounts[0],s_pickCounts[1],s_pickCounts[2],s_pickCounts[3],s_pickCounts[4],s_pickCounts[5],s_assistSnaps);
+		memset(s_pickCounts,0,sizeof(s_pickCounts));s_assistSnaps=0;
 		// Read-only engine collision probe. Unlike host spies this exercises
 		// the actual map, W3D terrain/model ray casting and screen projection.
 		const auto &surface=s_worldFrame.board;
@@ -1376,6 +1377,33 @@ bool XrGameBoot_PickWorld(const XrSurface &board,const XrPosef &aim,XrWorldHit &
 	hit.room=xrAdd(board.pose.position,xrRotate(board.pose.orientation,xrScale(local,board.width)));
 	hit.distance=xrLength(xrSub(hit.room,aim.position));hit.x=float(pixel.x);hit.y=float(pixel.y);
 	s_pickStart=a;s_pickEnd=b;s_pickPixel=pixel;s_pickAim=aim;s_pickRoom=hit.room;return result(5);
+}
+bool XrGameBoot_PickWorldAssisted(const XrSurface &board,const XrPosef &aim,XrWorldHit &hit,float assistRadians) {
+	if(!XrGameBoot_PickWorld(board,aim,hit)) return false;
+	if(!(assistRadians>0) || !TheTacticalView || !TheGameClient || !TheInGameUI || TheInGameUI->getPendingPlaceType() ||
+		TouchInput::hasArmedCommand()) return true;
+	if(TheTacticalView->pickDrawable(&s_pickPixel,FALSE,PICK_TYPE_SELECTABLE)) return true; // already on an object
+	const float radius=std::max(0.012f,hit.distance*tanf(assistRadians));
+	Drawable *best=nullptr;float bestDistance=radius;XrVector3f bestRoom={};
+	for(auto *d=TheGameClient->getDrawableList();d;d=d->getNextDrawable()) {
+		const Object *o=d->getObject();
+		if(!o || !o->isSelectable() || o->isEffectivelyDead() || o->isContained() || o->isOffMap() || d->getFullyObscuredByShroud()) continue;
+		const Coord3D *p=d->getPosition();
+		const auto local=xrTransformPoint(s_worldMapping,{p->x,p->y,p->z});
+		const XrVector3f room=xrAdd(board.pose.position,xrRotate(board.pose.orientation,xrScale(local,board.width)));
+		const float distance=xrLength(xrSub(room,hit.room));
+		if(distance<bestDistance) {best=d;bestDistance=distance;bestRoom=room;}
+	}
+	if(!best) return true;
+	ICoord2D pixel=s_pickPixel;
+	TheTacticalView->worldToScreen(best->getPosition(),&pixel);
+	int ox=0,oy=0;TheTacticalView->getOrigin(&ox,&oy);
+	pixel.x=std::clamp(pixel.x,ox+1,ox+TheTacticalView->getWidth()-2);
+	pixel.y=std::clamp(pixel.y,oy+1,oy+TheTacticalView->getHeight()-2);
+	s_pickPixel=pixel;s_pickRoom=bestRoom;
+	hit.room=bestRoom;hit.x=float(pixel.x);hit.y=float(pixel.y);hit.distance=xrLength(xrSub(bestRoom,aim.position));
+	++s_assistSnaps;
+	return true;
 }
 // GeneralsX @feature Codex 17/09/2026 P25 terrain-only destination; never
 // routes through native selection or issues a simulation message.

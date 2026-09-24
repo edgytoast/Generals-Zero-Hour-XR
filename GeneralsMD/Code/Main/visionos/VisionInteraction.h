@@ -38,6 +38,10 @@ struct VisionConfig {
 	float dragThresholdM = 0.02f;         // hand travel that turns a pinch into a drag (XrTriggerGesture value)
 	float secondHandTapSeconds = 0.35f;   // second-hand pinch shorter than this (and still) is a tap
 	float secondHandTapTravelM = 0.015f;
+	// Gaze aim assist for a select/order pinch (eye tracking is good to ~1-1.5 degrees; units on the table are 1-2 cm):
+	// a gaze pick that lands beside an object snaps to the nearest one within this angle. 0 disables. Pointer devices
+	// (mouse, trackpad, test input with a pointer ray) are exact and never assisted.
+	float gazeAssistRadians = 0.0262f; // 1.5 degrees
 	float cursorFallbackGain = 2.5f;      // board-plane travel per metre of hand travel when no eye ray is known
 	float minHeadHandDistanceM = 0.12f;   // closer than this the head->hand ray is degenerate
 
@@ -459,6 +463,7 @@ private:
 
 	// -- engine calls (tracked so cancel/flush are always balanced) --
 	bool enginePick(const XrPosef &aim, XrWorldHit &hit);
+	bool engineSelectPick(const Ptr &p, XrWorldHit &hit); // the start pick of a select / order pinch, with gaze aim assist
 	void enginePointer(bool active, float x, float y, bool select);
 	void engineSpatialPointer(bool active);
 	void engineTrigger(bool down, bool available, bool additive);

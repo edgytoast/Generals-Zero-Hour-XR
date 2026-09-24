@@ -201,6 +201,11 @@ bool XrGameBoot_StereoAtlas();
 bool XrGameBoot_StereoMultiview();
 void XrGameBoot_ConfigureMultiview(void *(*resolver)(const char *));
 bool XrGameBoot_PickWorld(const XrSurface &board,const XrPosef &aim,XrWorldHit &hit);
+// GeneralsX @feature visionOS 24/09/2026 Aim assist for gaze picks: PickWorld, then, when the hit is not on a selectable
+// object, snap to the nearest selectable, visible object within `assistRadians` of the eye (measured on the table at the
+// hit distance). Eye tracking is good to about 1-1.5 degrees; units on a 1 m table are 1-2 cm, so a plain gaze pick lands
+// beside the unit about as often as on it. Not applied while a building or an armed command is being placed.
+bool XrGameBoot_PickWorldAssisted(const XrSurface &board,const XrPosef &aim,XrWorldHit &hit,float assistRadians);
 void XrGameBoot_SpatialPointer(bool active);
 void XrGameBoot_SpatialClick(bool cancel);
 unsigned int XrGameBoot_WorldTexture();

@@ -34,6 +34,11 @@ bool XrGameBoot_PickWorld(const XrSurface &board, const XrPosef &aim, XrWorldHit
 	hit.x = 11; hit.y = 22; hit.distance = 3; hit.room = {4, 5, 6};
 	return g_ret;
 }
+bool XrGameBoot_PickWorldAssisted(const XrSurface &board, const XrPosef &aim, XrWorldHit &hit, float assistRadians) {
+	recf("PickWorldAssisted", board.width, aim.position.x, assistRadians);
+	hit.x = 33; hit.y = 44; hit.distance = 2; hit.room = {7, 8, 9};
+	return g_ret;
+}
 void XrGameBoot_SpatialPointer(bool active) { recf("SpatialPointer", active); }
 void XrGameBoot_SpatialTrigger(bool down, bool available, bool additive) { recf("SpatialTrigger", down, available, additive); }
 void XrGameBoot_SpatialClick(bool cancel) { recf("SpatialClick", cancel); }
@@ -105,6 +110,10 @@ int main() {
 	expectOnly("PickWorld(1.25,0.5,1.5,-0.25,0,0)");
 	g_ret = false;
 	CHECK(!b->PickWorld(board, aim, hit)); g_log.clear();
+	g_ret = true;
+	CHECK(b->PickWorldAssisted(board, aim, hit, 0.025f));
+	CHECK(hit.x == 33 && hit.y == 44 && hit.room.z == 9);
+	expectOnly("PickWorldAssisted(1.25,0.5,0.025,0,0,0)");
 	g_ret = true;
 
 	b->SpatialPointer(true);                 expectOnly("SpatialPointer(1,0,0,0,0,0)");

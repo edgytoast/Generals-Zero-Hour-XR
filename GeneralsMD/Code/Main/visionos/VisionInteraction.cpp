@@ -204,6 +204,12 @@ VisionInteraction::Ptr *VisionInteraction::other(const Ptr *p) {
 
 // =============================================================== engine call wrappers
 
+bool VisionInteraction::engineSelectPick(const Ptr &p, XrWorldHit &hit) {
+	if (!bridge_) return false;
+	engineTouched_ = true;
+	const float assist = p.kind == XR_POINTER_DEVICE ? 0.0f : cfg_.gazeAssistRadians;
+	return bridge_->PickWorldAssisted(board_, p.startAim, hit, assist);
+}
 VisionIntentPreview VisionInteraction::engineIntent() {
 	VisionIntentPreview v;
 	if (!bridge_) return v;
@@ -862,7 +868,7 @@ void VisionInteraction::startRole(Ptr &p) {
 			norm3(xrSub(t.planePoint, p.hasRay ? p.rayO : host_.head.position)));
 		if (p.hasRay) p.startAim = visionAimFromRay(p.rayO, p.rayD);
 		XrWorldHit hit;
-		if (!enginePick(p.startAim, hit)) { p.role = Role::Miss; break; }
+		if (!(p.role == Role::Select ? engineSelectPick(p, hit) : enginePick(p.startAim, hit))) { p.role = Role::Miss; break; }
 		p.pickedStart = true;
 		p.startHit = hit;
 		p.startLocal = visionBoardToLocal(board_, hit.room);
@@ -1206,7 +1212,7 @@ void VisionInteraction::releaseSelect(Ptr &p) {
 	}
 	// Tap: press and release at the START ray (release jitter must not change the target).
 	XrWorldHit hit;
-	if (!enginePick(p.startAim, hit)) { engineNeutral(); return; }
+	if (!engineSelectPick(p, hit)) { engineNeutral(); return; }
 	engineSpatialPointer(true);
 	enginePointer(true, hit.x, hit.y, false);
 	tapPreview_ = engineIntent(); // before the click changes the selection

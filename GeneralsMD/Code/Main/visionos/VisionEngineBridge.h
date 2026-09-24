@@ -51,6 +51,11 @@ public:
 	// Pick the board volume with a world-space ray. Fills the engine "token" pixel and the hit point
 	// in room space. Returns false when the ray misses the board volume or the engine is not ready.
 	virtual bool PickWorld(const XrSurface &board, const XrPosef &aim, XrWorldHit &hit) = 0;
+	// PickWorld with gaze aim assist: snap onto a selectable object within `assistRadians` (XrGameBoot_PickWorldAssisted).
+	virtual bool PickWorldAssisted(const XrSurface &board, const XrPosef &aim, XrWorldHit &hit, float assistRadians) {
+		(void)assistRadians;
+		return PickWorld(board, aim, hit);
+	}
 	// Snapshot the last PickWorld result as the active spatial pointer (or clear it).
 	virtual void SpatialPointer(bool active) = 0;
 	// Deferred trigger: press does nothing, release before ~2 cm ray drag = click (select or

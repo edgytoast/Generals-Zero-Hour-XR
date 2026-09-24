@@ -65,6 +65,13 @@ struct FakeBridge : VisionEngineBridge {
 	}
 	void Key(VisionKey key, bool down) override { Call k{C::Key}; k.i = int(key); k.f1 = down; calls.push_back(k); }
 	void RoutePointer(int target) override { Call k{C::Route}; k.i = target; calls.push_back(k); }
+	float lastAssist = -1.0f;
+	int assistedPicks = 0;
+	bool PickWorldAssisted(const XrSurface &board, const XrPosef &aim, XrWorldHit &hit, float assistRadians) override {
+		lastAssist = assistRadians;
+		++assistedPicks;
+		return PickWorld(board, aim, hit);
+	}
 	bool PickWorld(const XrSurface &board, const XrPosef &aim, XrWorldHit &hit) override {
 		Call k{C::Pick}; k.aim = aim; calls.push_back(k);
 		lastBoard = board;
@@ -345,6 +352,32 @@ static void testInitialPlacementProposal() {
 	u.host.headTracked = false;
 	u.frame();
 	CHECK(!u.out.boardChanged);
+}
+
+// Gaze aim assist: a select / order pinch with a gaze ray asks for the assisted pick at the configured angle; a pointer
+// device (mouse, trackpad, test pointer ray) is exact and asks for none.
+static void testGazeAimAssist() {
+	{
+		Sim s;
+		s.beginAtBoard(1, XR_HAND_RIGHT, 0.1f, 0.05f, H0());
+		s.frame();
+		CHECK(s.bridge.assistedPicks >= 1);
+		NEAR(s.bridge.lastAssist, VisionConfig().gazeAssistRadians);
+		CHECK(VisionConfig().gazeAssistRadians > 0.02f && VisionConfig().gazeAssistRadians < 0.04f);
+		const int before = s.bridge.assistedPicks;
+		s.end(1, XR_HAND_RIGHT, H0());
+		s.frames(2);
+		CHECK(s.bridge.assistedPicks > before); // the tap re-picks at the start ray, assisted again
+		NEAR(s.bridge.lastAssist, VisionConfig().gazeAssistRadians);
+	}
+	{
+		Sim s;
+		s.beginAtBoard(1, XR_HAND_RIGHT, 0.1f, 0.05f, H0());
+		s.queue.back().pointer_kind = XR_POINTER_DEVICE;
+		s.frame();
+		CHECK(s.bridge.assistedPicks >= 1);
+		NEAR(s.bridge.lastAssist, 0.0f);
+	}
 }
 
 static void testSelect() {
@@ -2133,6 +2166,7 @@ static void testFrameDriver() {
 int main() {
 	testHelpers();
 	testInitialPlacementProposal();
+	testGazeAimAssist();
 	testSelect();
 	testAdditive();
 	testContextCommand();

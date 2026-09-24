@@ -38,6 +38,9 @@ public:
 	bool PickWorld(const XrSurface &board, const XrPosef &aim, XrWorldHit &hit) override {
 		return XrGameBoot_PickWorld(board, aim, hit);
 	}
+	bool PickWorldAssisted(const XrSurface &board, const XrPosef &aim, XrWorldHit &hit, float assistRadians) override {
+		return XrGameBoot_PickWorldAssisted(board, aim, hit, assistRadians);
+	}
 	void SpatialPointer(bool active) override { XrGameBoot_SpatialPointer(active); }
 	void SpatialTrigger(bool down, bool available, bool additive) override {
 		XrGameBoot_SpatialTrigger(down, available, additive);
