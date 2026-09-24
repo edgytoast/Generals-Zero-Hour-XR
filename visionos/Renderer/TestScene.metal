@@ -116,6 +116,22 @@ fragment CompositeFragOut composite_fragment(CompositeOut in [[stage_in]],
     CompositeFragOut out;
     out.color = c;
     out.depth = params.depth;
+    if (params.flags & GXXR_COMPOSITE_PLANE_DEPTH) {
+        // Eye ray through this pixel (two points on it, reverse-Z: 1 = near), intersected with the table plane.
+        const float2 ndc = float2(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0);
+        float4 a = params.worldFromClip * float4(ndc, 1.0, 1.0);
+        float4 b = params.worldFromClip * float4(ndc, 0.25, 1.0);
+        a.xyz /= a.w; b.xyz /= b.w;
+        const float3 dir = b.xyz - a.xyz;
+        const float denom = dot(params.plane.xyz, dir);
+        if (fabs(denom) > 1e-6) {
+            const float t = -(dot(params.plane.xyz, a.xyz) + params.plane.w) / denom;
+            if (t > 0.0) {
+                const float4 clip = params.clipFromWorld * float4(a.xyz + dir * t, 1.0);
+                if (clip.w > 1e-5) out.depth = saturate(clip.z / clip.w);
+            }
+        }
+    }
     return out;
 }
 

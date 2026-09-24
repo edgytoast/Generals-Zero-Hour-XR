@@ -146,6 +146,9 @@ typedef struct GXHostFrameOutput {
     float focus[3];
     uint32_t layerCount;
     GXHostLayer layers[GX_HOST_MAX_LAYERS];
+    bool hasBoardPlane;         /* boardPlane is valid (a placed tabletop) */
+    float boardPlane[4];        /* the table surface in room space: xyz = unit normal (up), w = -dot(normal, point); the
+                                 * compositor writes per-pixel depth on it for the system's reprojection */
     uint32_t gazeTargetCount;   /* tabletop only; 0 in menus, loading and Ground View */
     GXHostGazeTarget gazeTargets[GX_HOST_MAX_GAZE_TARGETS];
 } GXHostFrameOutput;

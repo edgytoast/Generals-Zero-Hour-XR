@@ -123,6 +123,13 @@ VisionPresentationMode VisionPresentation::finish(const VisionPresentationFacts 
 	out.presentationMode = int(mode);
 	out.groundView = mode == VisionPresentationMode::GroundView;
 	out.stereoValid = view_.stereoVisible && mode != VisionPresentationMode::Recovery;
+	if (driver.host().boardPlaced) {
+		const XrSurface &b = driver.host().board;
+		const XrVector3f n = xrRotate(b.pose.orientation, {0, 0, 1});
+		out.hasBoardPlane = true;
+		out.boardPlane[0] = n.x; out.boardPlane[1] = n.y; out.boardPlane[2] = n.z;
+		out.boardPlane[3] = -(n.x * b.pose.position.x + n.y * b.pose.position.y + n.z * b.pose.position.z);
+	}
 
 	// Final layout: the layers published now are the panel table of the next interaction step.
 	layout(post, driver, plan_);

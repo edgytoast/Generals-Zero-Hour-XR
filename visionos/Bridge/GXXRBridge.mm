@@ -1091,8 +1091,19 @@ static void GXXRDebugDumpTexture(id<MTLCommandBuffer> cb, id<MTLTexture> tex, NS
                     uint32_t flags = GXXR_COMPOSITE_FLIP_Y;  // GL targets are bottom-up, coverage-premultiplied
                     if (![GXXRMetalRenderer isSRGBFormat:src.pixelFormat]) flags |= GXXR_COMPOSITE_SRGB_DECODE;
                     const simd_float4 uvRect = out.atlas ? simd_make_float4(0.5f * (float)pi, 0, 0.5f, 1) : simd_make_float4(0, 0, 1, 1);
+                    // Per-pixel depth on the table plane (lifted 1 cm: terrain and units stand on it) for the system's
+                    // reprojection between engine frames; the constant focus depth is the fallback off the plane.
+                    simd_float4 plane = simd_make_float4(0, 0, 0, 0);
+                    if (out.hasBoardPlane && !out.groundView) {
+                        const simd_float3 up = simd_make_float3(out.boardPlane[0], out.boardPlane[1], out.boardPlane[2]);
+                        plane = simd_make_float4(up, out.boardPlane[3] - 0.01f); // lifted 1 cm
+                        flags |= GXXR_COMPOSITE_PLANE_DEPTH;
+                    }
+                    simd_float4x4 renderClip;
+                    memcpy(&renderClip, pe.clip_from_world, sizeof(renderClip));
                     [_renderer encodeEyeCompositeInto:cb source:src flags:flags uvRect:uvRect
                                         constantDepth:hasFocus ? [self constantDepthForEye:pe focus:focus] : 0.0f
+                                        clipFromWorld:renderClip plane:plane
                                                 color:colorTex colorSlice:e.array_slice depth:depthTex viewport:vp clear:first];
                     cleared = true;
                     drewAnything = true;

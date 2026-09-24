@@ -28,12 +28,20 @@ typedef struct {
 // sRGB compositor drawable re-encodes correctly. Un-premultiplies first when the source is
 // premultiplied, decodes, and premultiplies again.
 #define GXXR_COMPOSITE_SRGB_DECODE (1u << 2)
+// Per-pixel depth from the tabletop plane instead of the constant depth: each pixel's eye ray is intersected with the plane
+// (GXXRCompositeParams.plane) and the hit's depth is written (clipFromWorld / worldFromClip of the eye the picture was
+// rendered for). The system reprojects the picture between engine frames by this depth; a single constant depth made the
+// tilted table and its units swim when the head moved (the engine renders 15-30 fps against a 90 Hz display).
+#define GXXR_COMPOSITE_PLANE_DEPTH (1u << 3)
 
 typedef struct {
     unsigned int flags;
     float depth;          // reverse-Z NDC depth written where alpha > 0 (fullscreen eye composite); 0 = far
     float pad0, pad1;
     simd_float4 uvRect;   // xy = origin, zw = size of the source rectangle in [0,1] (atlas eye rects)
+    simd_float4x4 clipFromWorld;  // GXXR_COMPOSITE_PLANE_DEPTH: the eye the picture was rendered for
+    simd_float4x4 worldFromClip;
+    simd_float4 plane;            // xyz = unit normal, w = -dot(normal, point on plane)
 } GXXRCompositeParams;
 
 // World-anchored textured quad ("layer") composite: unit quad centered on the local origin,

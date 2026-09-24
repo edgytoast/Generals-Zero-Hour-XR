@@ -93,6 +93,22 @@ NS_ASSUME_NONNULL_BEGIN
                       viewport:(MTLViewport)viewport
                          clear:(BOOL)clear;
 
+/// The eye composite with per-pixel table-plane depth (GXXR_COMPOSITE_PLANE_DEPTH): `plane` = {normal, -dot(normal, point)}
+/// in world space, `clipFromWorld` the projection of the eye the picture was rendered for. `constantDepth` stays the value
+/// for pixels whose ray misses the plane.
+- (void)encodeEyeCompositeInto:(id<MTLCommandBuffer>)commandBuffer
+                        source:(id<MTLTexture>)source
+                         flags:(uint32_t)flags
+                        uvRect:(simd_float4)uvRect
+                 constantDepth:(float)constantDepth
+                 clipFromWorld:(simd_float4x4)clipFromWorld
+                         plane:(simd_float4)plane
+                         color:(id<MTLTexture>)color
+                    colorSlice:(NSUInteger)slice
+                         depth:(id<MTLTexture>)depth
+                      viewport:(MTLViewport)viewport
+                         clear:(BOOL)clear;
+
 /// Draws world-anchored quads (premultiplied blend, reverse-Z depth test + write) into a view's target
 /// with the eye's `clipFromWorld`. Loads the existing color/depth (encode it after the eye composite).
 - (void)encodeLayers:(NSArray<GXXRCompositeLayer*>*)layers

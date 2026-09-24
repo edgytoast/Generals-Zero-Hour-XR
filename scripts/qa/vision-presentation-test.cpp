@@ -971,6 +971,14 @@ static void testPipeline() {
 	CHECK(e.plan.world.enabled && e.plan.world.width == 1536 && e.plan.world.height == 1310 && e.plan.stereoWorld);
 	CHECK((e.plan.request.targetMask & GX_TARGET_STEREO) && e.plan.request.eyeWidth == 1536 && e.plan.request.eyeHeight == 1310);
 	CHECK(e.out.layerCount == 2 && std::strcmp(e.out.layers[0].name, "ui-bar") == 0 && std::strcmp(e.out.layers[1].name, "ui-hud") == 0);
+	// the table plane rides along for per-pixel reprojection depth: unit normal = board up, the board centre on the plane
+	CHECK(e.out.hasBoardPlane);
+	{
+		const XrVector3f n = {e.out.boardPlane[0], e.out.boardPlane[1], e.out.boardPlane[2]};
+		NEARE(xrLength(n), 1.0f, 1e-4f);
+		CHECK(n.y > 0.99f); // a flat table: up is world up
+		CHECK(std::isfinite(e.out.boardPlane[3]) && e.out.boardPlane[3] < 0.0f); // the table is above the floor origin
+	}
 	CHECK(e.driver.boardPlaced() && e.world.board.width > 0 && vnear(e.world.board.pose.position, e.driver.host().board.pose.position));
 	CHECK(e.plan.plan.panelCount == 2);
 	for (int i = 0; i < 2; ++i) VNEAR((XrVector3f{e.out.layers[i].position[0], e.out.layers[i].position[1], e.out.layers[i].position[2]}), e.plan.plan.panels[i].surface.pose.position);

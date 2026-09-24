@@ -286,6 +286,23 @@ using gxxr::Range;
                          depth:(id<MTLTexture>)depth
                       viewport:(MTLViewport)viewport
                          clear:(BOOL)clear {
+    [self encodeEyeCompositeInto:commandBuffer source:source flags:(flags & ~GXXR_COMPOSITE_PLANE_DEPTH) uvRect:uvRect
+                   constantDepth:constantDepth clipFromWorld:matrix_identity_float4x4 plane:simd_make_float4(0, 0, 0, 0)
+                           color:color colorSlice:slice depth:depth viewport:viewport clear:clear];
+}
+
+- (void)encodeEyeCompositeInto:(id<MTLCommandBuffer>)commandBuffer
+                        source:(id<MTLTexture>)source
+                         flags:(uint32_t)flags
+                        uvRect:(simd_float4)uvRect
+                 constantDepth:(float)constantDepth
+                 clipFromWorld:(simd_float4x4)clipFromWorld
+                         plane:(simd_float4)plane
+                         color:(id<MTLTexture>)color
+                    colorSlice:(NSUInteger)slice
+                         depth:(id<MTLTexture>)depth
+                      viewport:(MTLViewport)viewport
+                         clear:(BOOL)clear {
     id<MTLRenderCommandEncoder> enc = [commandBuffer renderCommandEncoderWithDescriptor:[self passWithColor:color slice:slice depth:depth clear:clear]];
     enc.label = @"GXXR composite external eye";
     [enc setViewport:viewport];
@@ -296,6 +313,9 @@ using gxxr::Range;
     p.flags = flags;
     p.depth = constantDepth;
     p.uvRect = uvRect;
+    p.clipFromWorld = clipFromWorld;
+    p.worldFromClip = simd_inverse(clipFromWorld);
+    p.plane = plane;
     [enc setFragmentBytes:&p length:sizeof(p) atIndex:GXXRBufferIndexCompositeParams];
     [enc setFragmentTexture:source atIndex:0];
     [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
