@@ -1042,7 +1042,7 @@ static void testWorkspace() {
 		s.host.worldZoom = 2.2f;
 		s.command(XR_CMD_RESET_WORKSPACE);
 		s.frame();
-		NEAR(s.out.board.width, 1.0f);
+		NEAR(s.out.board.width, VisionConfig().boardDefaultWidthM);
 		NEAR(s.out.worldZoom, 1.0f);
 	}
 	// ---- gaze tolerance: a bar hit within the pad, and just outside the pad it is the rim / nothing
@@ -2197,8 +2197,8 @@ static void testFrameDriver() {
 	CHECK(d.host().engine.canAdjustWorld && d.host().engine.interactiveGame);
 	CHECK(out.boardChanged && d.boardPlaced());
 	VNEAR(world.board.pose.position, (XrVector3f{0, 0.8f, -VisionConfig().initialDistanceM}));
-	NEAR(world.board.width, 1.0f);
-	NEAR(world.coverage, xrMapCoverage(1.0f, 1.0f));
+	NEAR(world.board.width, VisionConfig().boardDefaultWidthM);
+	NEAR(world.coverage, xrMapCoverage(1.0f, VisionConfig().boardDefaultWidthM));
 	VNEAR(world.eyes[0].position, (XrVector3f{-0.031f, 1.5f, 0}));
 	VNEAR(world.eyes[1].position, (XrVector3f{0.031f, 1.5f, 0}));
 	NEAR(world.fov[0].angleLeft, -0.80f);

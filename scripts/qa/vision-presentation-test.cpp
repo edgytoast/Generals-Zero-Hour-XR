@@ -199,7 +199,7 @@ static void testEyeAndWorldFrame() {
 	d.step(frame, true, nullptr, 0, w2);
 	CHECK(d.boardPlaced() && d.host().boardPlaced);
 	CHECK(vnear(w2.board.pose.position, d.host().board.pose.position));
-	NEAR(w2.board.width, 1.0f);
+	NEAR(w2.board.width, VisionConfig().boardDefaultWidthM);
 	for (int eye = 0; eye < 2; ++eye) {
 		NEAR(w2.eyes[eye].position.x, frame.eyes[eye].pose.position.x);
 		NEAR(w2.fov[eye].angleLeft, frame.eyes[eye].fov.angle_left);
@@ -836,7 +836,7 @@ static void testWorkspace() {
 	VNEAR(sc.pose.position, (XrVector3f{1.1f, 1.48f, 0}));
 	NEAR(sc.width, kVisionScreenWidthM);
 	// record + save + load: preferences and the WIDTH come back, poses do not (Quest policy P20)
-	const XrSurface board = flatBoard({1.0f, 0.8f, -2.9f}, 1.3f);
+	const XrSurface board = flatBoard({1.0f, 0.8f, -2.9f}, 1.6f);
 	const XrSurface bar = visionUiBarSurface(board, 9.0f / 16.0f, 9.0f / 16.0f, xrCommandRect(0.3f));
 	w.layout.unitRings = false;
 	w.layout.healthBars = false;
@@ -847,7 +847,7 @@ static void testWorkspace() {
 	CHECK(!r.layout.unitRings && !r.layout.healthBars && r.layout.boardFrame); // preferences restored
 	NEAR(r.layout.worldZoom, 1.7f);
 	CHECK(r.widthPending);
-	NEAR(r.savedBoardWidth, 1.3f);
+	NEAR(r.savedBoardWidth, 1.6f);
 	// P20: the arrangement itself is the free-standing default again
 	VNEAR(r.layout.relative[1].pose.position, (XrVector3f{0, -0.54f, -0.55f}));
 	NEAR(r.layout.relative[1].width, 1.65f);
@@ -857,7 +857,7 @@ static void testWorkspace() {
 		CHECK(raw.load(path) && raw.formatVersion == 11);
 		const XrSurface saved = raw.relative[1];
 		VNEAR(saved.pose.position, (XrVector3f{0.0f, -0.8f, -0.9f}));
-		NEAR(saved.width, 1.3f);
+		NEAR(saved.width, 1.6f);
 		const XrVector3f up = xrRotate(saved.pose.orientation, {0, 0, 1});
 		NEARE(up.y, 1.0f, 1e-3f);
 		NEAR(raw.worldZoom, 1.7f);
@@ -865,7 +865,7 @@ static void testWorkspace() {
 	// a default-width layout does not trigger a restore
 	VisionWorkspace d;
 	d.ensureAnchor(f);
-	d.record(flatBoard({1.0f, 0.8f, -2.9f}, 1.0f), bar, 1.0f);
+	d.record(flatBoard({1.0f, 0.8f, -2.9f}, 1.3f), bar, 1.0f);
 	CHECK(d.save(path));
 	VisionWorkspace dr;
 	dr.loadFrom(path, "", 1);

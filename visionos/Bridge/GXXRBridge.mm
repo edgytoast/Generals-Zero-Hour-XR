@@ -64,7 +64,7 @@ namespace {
 constexpr float kBoardHalfX = 0.5f;
 constexpr float kBoardHalfZ = 0.3f;
 constexpr float kBoardHeight = 0.8f;
-constexpr float kBoardDistance = 1.0f;  // same as VisionInteractionConfig::initialDistanceM
+constexpr float kBoardDistance = 1.1f;  // same as VisionInteractionConfig::initialDistanceM
 // Head height used when ARKit gives no device anchor (e.g. some simulator states).
 constexpr float kFallbackHeadHeight = 1.5f;
 // Frames to wait for a tracked anchor before placing the board with the fallback pose.

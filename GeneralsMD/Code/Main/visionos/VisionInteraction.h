@@ -59,10 +59,10 @@ struct VisionConfig {
 	float grabBarMinLengthM = 0.30f, grabBarMaxLengthM = 0.60f;
 
 	// --- workspace (the physical board) ---
-	float boardDefaultWidthM = 1.0f;
+	float boardDefaultWidthM = 1.3f;       // first headset run: 1.0 m read as too small
 	float boardMinWidthM = 0.45f;         // XrSurfaceGrab lower bound: units stay readable
 	float boardMaxWidthM = 2.0f;          // comfortable upper bound (95 degrees wide at 0.9 m)
-	float initialDistanceM = 1.0f;        // board centre ahead of the head (floor origin); the console sits in front of it
+	float initialDistanceM = 1.1f;        // board centre ahead of the head (floor origin); the console sits in front of it
 	float headRelativeDistanceM = 1.45f;  // simulator-style origin at head height (same numbers as the shell): board, console
 	float headRelativeDropM = 0.35f;      // and far HUD band all fit the simulator's 59-degree vertical view
 	float floorOriginTableHeightM = 0.8f; // XR_TABLETOP_SURFACE_HEIGHT_M
