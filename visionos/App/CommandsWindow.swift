@@ -38,6 +38,10 @@ struct CommandsWindow: View {
         .appWindowStyle()
         .commandsHoverOrnament(store: store)
         .hudOrnament(location: .commands, model: appModel, store: store)
+        .task {
+            // Restored alone at app start (the launcher, which runs the start-up, was closed when the app last quit).
+            if !appModel.bootstrapped, appModel.claimLauncherReopen() { openWindow(id: "launcher") }
+        }
         .onChange(of: appModel.spaceState) { _, state in
             // The launcher hides during a match. If the tabletop closes while only this window is left (the player closed
             // the controls strip), bring the launcher back so the app never ends up with no window.

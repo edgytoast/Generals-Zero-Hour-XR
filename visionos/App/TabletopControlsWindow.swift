@@ -70,6 +70,14 @@ struct TabletopControlsWindow: View {
         }
             .padding(16)
             .fixedSize()
+            .task {
+                // The system restores the windows that were open when the app last quit. Restored alone (no tabletop, no
+                // launcher), this strip would be all there is: the launcher runs the start-up (game data, engine, tabletop),
+                // so bring it back and step aside.
+                guard model.spaceState != .open else { return }
+                if model.claimLauncherReopen() { openWindow(id: "launcher") }
+                dismissWindow(id: Self.id)
+            }
             .onChange(of: model.spaceState) { _, state in
                 guard state == .closed else { return }
                 if model.claimLauncherReopen() { openWindow(id: "launcher") }
