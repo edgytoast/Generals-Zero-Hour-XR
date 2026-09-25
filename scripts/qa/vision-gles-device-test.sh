@@ -15,7 +15,7 @@
 # simulator-platform executable: `xcrun simctl spawn <udid>` runs it inside the visionOS simulator.
 #
 # Environment (all optional):
-#   GX_DEPS_ROOT     root of the out-of-repo dependencies (default /Users/jvadala/CandC/deps)
+#   GX_DEPS_ROOT     root of the out-of-repo dependencies (default $HOME/CandC/deps)
 #   GX_ANGLE_ROOT    ANGLE install root produced by build-angle.sh (default $GX_DEPS_ROOT/angle/install)
 #   GX_DXVK_DIR      checkout providing the D3D8 headers   (default $GX_DEPS_ROOT/src/fbraz3-dxvk)
 #   GX_SDL_INCLUDE   SDL3 headers                          (default $GX_DEPS_ROOT/src/SDL-release-3.4.2/include)
@@ -31,7 +31,7 @@
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-DEPS="${GX_DEPS_ROOT:-/Users/jvadala/CandC/deps}"
+DEPS="${GX_DEPS_ROOT:-$HOME/CandC/deps}"
 ANGLE="${GX_ANGLE_ROOT:-$DEPS/angle/install}/xrsimulator"
 DXVK="${GX_DXVK_DIR:-$DEPS/src/fbraz3-dxvk}"
 SDLINC="${GX_SDL_INCLUDE:-$DEPS/src/SDL-release-3.4.2/include}"

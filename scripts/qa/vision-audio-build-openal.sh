@@ -9,13 +9,13 @@
 #
 #   scripts/qa/vision-audio-build-openal.sh [--device]
 # Environment: GX_BUILD_DIR (engine build dir, default <repo>/build/visionos-simulator), GX_DEPS_ROOT (default
-# /Users/jvadala/CandC/deps), GX_AUDIO_OPENAL_OUT (default $GX_DEPS_ROOT/au-audio-build). Prints the library path.
+# $HOME/CandC/deps), GX_AUDIO_OPENAL_OUT (default $GX_DEPS_ROOT/au-audio-build). Prints the library path.
 set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 sysroot=xrsimulator; slice=sim
 if [ "${1:-}" = "--device" ]; then sysroot=xros; slice=dev; fi
 bd="${GX_BUILD_DIR:-$repo_dir/build/visionos-$([ $slice = sim ] && echo simulator || echo device)}"
-deps="${GX_DEPS_ROOT:-/Users/jvadala/CandC/deps}"
+deps="${GX_DEPS_ROOT:-$HOME/CandC/deps}"
 out="${GX_AUDIO_OPENAL_OUT:-$deps/au-audio-build}"
 src_in="$bd/_deps/openal_soft-src"
 [ -f "$src_in/common/alsem.h" ] || { echo "openal-soft source not found at $src_in (run scripts/build/visionos/build-engine.sh first or set GX_BUILD_DIR)" >&2; exit 2; }

@@ -79,7 +79,7 @@ targets:
         # in the Xcode GUI it can be set as a user-defined build setting.
         # GX_ANGLE_LINK: "static" (default; libANGLE.a + libtranslator.a linked into the executable, nothing
         # to embed or sign) or "shared" (libANGLE-shared.dylib embedded in Frameworks/ and signed).
-        GX_ANGLE_ROOT: /Users/jvadala/CandC/deps/angle/install
+        GX_ANGLE_ROOT: $(HOME)/CandC/deps/angle/install
         GX_ANGLE_LINK: static
         GX_ANGLE_LDFLAGS_static: "$(GX_ANGLE_ROOT)/$(PLATFORM_NAME)/lib/libANGLE.a $(GX_ANGLE_ROOT)/$(PLATFORM_NAME)/lib/libtranslator.a -lz -framework QuartzCore -framework CoreGraphics -framework IOSurface -framework Foundation"
         GX_ANGLE_LDFLAGS_shared: "-L$(GX_ANGLE_ROOT)/$(PLATFORM_NAME)/lib -lANGLE-shared"

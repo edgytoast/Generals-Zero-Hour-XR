@@ -7,7 +7,7 @@
 #
 #   GX_DEPS_ROOT          Directory that holds the big out-of-repo dependencies
 #                         (vcpkg checkout, ANGLE build, download and binary caches).
-#                         Default: /Users/jvadala/CandC/deps
+#                         Default: $HOME/CandC/deps
 #   VCPKG_ROOT            vcpkg checkout used by the CMake presets (toolchain file).
 #                         Default: $GX_DEPS_ROOT/vcpkg. Must be a FULL clone at a commit
 #                         that already supports visionOS (vcpkg PR #45464, June 2025);
@@ -43,7 +43,7 @@ _gx_env_dir="$(cd "$(dirname "$_gx_env_file")" && pwd)"
 GX_REPO_ROOT="$(cd "$_gx_env_dir/../../.." && pwd)"
 export GX_REPO_ROOT
 
-export GX_DEPS_ROOT="${GX_DEPS_ROOT:-/Users/jvadala/CandC/deps}"
+export GX_DEPS_ROOT="${GX_DEPS_ROOT:-$HOME/CandC/deps}"
 export VCPKG_ROOT="${VCPKG_ROOT:-$GX_DEPS_ROOT/vcpkg}"
 export VCPKG_DOWNLOADS="${VCPKG_DOWNLOADS:-$GX_DEPS_ROOT/vcpkg-downloads}"
 export GX_VCPKG_BINARY_CACHE="${GX_VCPKG_BINARY_CACHE:-$GX_DEPS_ROOT/vcpkg-binary-cache}"

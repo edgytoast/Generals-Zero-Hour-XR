@@ -4,7 +4,7 @@
 # Lives in the repo as scripts/build/visionos/build-angle.sh.
 #
 # usage: build-angle-visionos.sh <simulator|device|all> [DEPS_ROOT]
-#   DEPS_ROOT defaults to $DEPS_ROOT or /Users/jvadala/CandC/deps
+#   DEPS_ROOT defaults to $DEPS_ROOT or $HOME/CandC/deps
 #
 # Source : WebKit's vendored ANGLE (Source/ThirdParty/ANGLE) from https://github.com/WebKit/WebKit,
 #          pinned to WEBKIT_SHA below (override with WEBKIT_SHA=... ).  Built with the ANGLE.xcodeproj
@@ -17,7 +17,7 @@
 set -euo pipefail
 
 MODE="${1:-all}"
-DEPS_ROOT="${2:-${DEPS_ROOT:-/Users/jvadala/CandC/deps}}"
+DEPS_ROOT="${2:-${DEPS_ROOT:-$HOME/CandC/deps}}"
 WEBKIT_SHA="${WEBKIT_SHA:-e2f19a74a3bbffb907f739523cc547b6c1707c35}"   # WebKit main, 2026-09-20
 XROS_DEPLOYMENT_TARGET="${XROS_DEPLOYMENT_TARGET:-2.0}"
 JOBS="${JOBS:-$(sysctl -n hw.ncpu)}"

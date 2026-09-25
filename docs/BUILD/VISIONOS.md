@@ -70,7 +70,7 @@ presets build the `z_generals` target only.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `GX_DEPS_ROOT` | `/Users/jvadala/CandC/deps` | Out-of-repo dependencies: vcpkg, ANGLE, DXVK header checkout, caches. |
+| `GX_DEPS_ROOT` | `$HOME/CandC/deps` | Out-of-repo dependencies: vcpkg, ANGLE, DXVK header checkout, caches. |
 | `VCPKG_ROOT` | `$GX_DEPS_ROOT/vcpkg` | vcpkg checkout used by the presets (toolchain file `$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake`). |
 | `VCPKG_DOWNLOADS` | `$GX_DEPS_ROOT/vcpkg-downloads` | Source tarballs, shared by both triplets. |
 | `VCPKG_BINARY_SOURCES` | `clear;files,$GX_DEPS_ROOT/vcpkg-binary-cache,readwrite` | Compiled-package cache. Third-party libraries compile once per triplet; every later clean build restores them (24 packages in about 4 s). |

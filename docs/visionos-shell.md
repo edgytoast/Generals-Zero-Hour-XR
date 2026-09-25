@@ -25,7 +25,7 @@ scripts/build/visionos/build-angle.sh all        # or: simulator | device   (abo
 
 It installs `xrsimulator/` and `xros/` slices (`include/` + `lib/{libANGLE.a,libtranslator.a,libANGLE-shared.dylib}`)
 under `<DEPS_ROOT>/angle/install`. The shell finds it through **`GX_ANGLE_ROOT`** (default: the install root of
-`build-angle.sh`, `/Users/jvadala/CandC/deps/angle/install`; override with the environment variable, or as a
+`build-angle.sh`, `$HOME/CandC/deps/angle/install`; override with the environment variable, or as a
 user-defined build setting in the Xcode GUI). If ANGLE is missing `build-shell.sh` stops with a message that names
 the missing file and the `build-angle.sh` command to run.
 

@@ -7,7 +7,7 @@
 set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_dir"
-deps="${GX_DEPS_ROOT:-/Users/jvadala/CandC/deps}"
+deps="${GX_DEPS_ROOT:-$HOME/CandC/deps}"
 angle_inc="${GX_ANGLE_ROOT:-$deps/angle/install}/xrsimulator/include"
 dxvk="${GX_DXVK_DIR:-$deps/src/fbraz3-dxvk}"
 test_dir="$(mktemp -d "${TMPDIR:-/tmp}/vision-gles-formats.XXXXXX")"

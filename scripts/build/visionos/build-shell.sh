@@ -46,7 +46,7 @@ done
 command -v xcodegen >/dev/null || { echo "xcodegen not found (brew install xcodegen)" >&2; exit 1; }
 
 # ---- ANGLE ----------------------------------------------------------------------------------
-ANGLE_ROOT="${GX_ANGLE_ROOT:-/Users/jvadala/CandC/deps/angle/install}"   # build-angle.sh's default install root
+ANGLE_ROOT="${GX_ANGLE_ROOT:-$HOME/CandC/deps/angle/install}"   # build-angle.sh's default install root
 ANGLE_LINK="${GX_ANGLE_LINK:-static}"
 [[ "$ANGLE_LINK" == "static" || "$ANGLE_LINK" == "shared" ]] || { echo "GX_ANGLE_LINK must be static or shared" >&2; exit 2; }
 ANGLE_SLICE="xrsimulator"; [[ "$MODE" == "device" ]] && ANGLE_SLICE="xros"
