@@ -2,6 +2,10 @@
 
 An unofficial Meta Quest 3 tabletop port of *Command & Conquer: Generals – Zero Hour*. The original game's terrain, units and effects appear as a stereoscopic miniature battlefield, with separate spatial build, command and settings windows. This is a community project, not an Electronic Arts product or endorsement.
 
+> **Apple Vision Pro port (this fork, branch `visionos-port`):** a native visionOS version of the tabletop, with look-and-pinch controls. Early but playable. See **[README_VISIONOS.md](README_VISIONOS.md)** for status, build steps and video.
+>
+> <img src="docs/media/visionos/headset-battle.gif" width="60%" alt="The tabletop battlefield on Apple Vision Pro">
+
 ![A Generals: Zero Hour XR tabletop battlefield with a mountain map, base and floating build window](docs/media/quest-tabletop/mountain-tabletop.jpeg)
 
 <p align="center">

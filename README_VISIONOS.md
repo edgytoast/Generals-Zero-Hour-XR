@@ -4,25 +4,40 @@ An unofficial, community effort to bring the tabletop edition of *Command & Conq
 as a native visionOS app. The Meta Quest 3 edition described in the main [README.md](README.md) remains the supported
 release; this file covers the visionOS work only. This is not an Electronic Arts product and is not endorsed by EA.
 
-![The visionOS shell in the simulator: a Metal test tabletop over a passthrough room, with the launcher window](docs/media/visionos/shell-tabletop-direct.jpg)
+![The square tabletop battlefield on a real table, seen through Apple Vision Pro](docs/media/visionos/headset-45.jpg)
 
-The image above is the current shell running in the visionOS simulator. The checkerboard tabletop and coloured blocks are a
-**renderer test scene**, not the game. Simulator capture, 2026-09-20.
+<p align="center">
+  <img src="docs/media/visionos/headset-battle.gif" width="70%" alt="A battle at the bridge on the tabletop, captured on Apple Vision Pro">
+</p>
 
-## Status: a mission plays in the simulator; no device test yet
+<p align="center">
+  <img src="docs/media/visionos/headset-15.jpg" width="49%" alt="Selecting units on the table with look and pinch">
+  <img src="docs/media/visionos/headset-168.jpg" width="49%" alt="The engine control bar lying in front of the table like a console">
+</p>
+<p align="center">
+  <img src="docs/media/visionos/headset-300.jpg" width="49%" alt="Mountain, rail bridge and the tabletop controls strip">
+  <img src="docs/media/visionos/headset-336.jpg" width="49%" alt="Ground View: walking the battlefield at human scale">
+</p>
 
-Be clear about where this stands. As of 2026-09-22:
+Captured on an Apple Vision Pro (visionOS 27 beta), 2026-09-25, with the developer's own game files. Short clips:
+[select and move](docs/media/visionos/headset-select-move.mp4) ·
+[battle](docs/media/visionos/headset-battle.mp4) ·
+[Ground View](docs/media/visionos/headset-ground-view.mp4).
+
+## Status: playable on Apple Vision Pro, early and rough
+
+As of 2026-09-25:
 
 | Area | State |
 | --- | --- |
-| Native app shell (SwiftUI window, immersive space, Compositor Services, Metal) | Working in the visionOS **simulator**, ~60 fps compositor |
-| OpenGL ES 3.0 on Metal (ANGLE) for visionOS | Builds for simulator and device; smoke test and the real d3d8gles-on-ANGLE device test (90/90 checks) both pass in the simulator |
-| The Zero Hour engine on visionOS | **Runs with real game data in the simulator** (the developer's own retail install, used in place, never committed). Main menu renders; campaign mission `MD_USA01` loads and shows as a stereo 3D miniature on a virtual table, with the engine HUD (radar, money, buttons) beside it. Engine about 12–15 fps in the simulator, compositor 60 fps |
-| Engine/compositor architecture | Decoupled: the engine runs on its own thread at its own pace; the compositor thread presents at display rate independent of engine load. Soak-tested 340 s in the simulator: 60 fps compositor throughout, including through simulated engine stalls |
-| Game data import and detection | Implemented and tested: a faithful C++ port of the Quest's archive validator (726 host checks), a resumable/atomic importer with crash recovery, screenshotted for every state in the simulator |
-| Gameplay input | **Works in the simulator with an injected gaze ray**: look+pinch selects a unit, pinch on ground moves it, pinch-drag box-selects, drag on the board rim pans, pinch on the HUD minimap orders units there. The simulator gives no gaze ray of its own, so these runs use the `-testInput` hook (below). Not yet seen: attacking an enemy, building placement, two-hand table gestures |
-| Presentation, UI, audio | Implemented and tested; the launcher now steps aside during a match so it does not block the board. Commands-window buttons were not pressed in a real match (simulator automation cannot tap SwiftUI windows) |
-| Physical Apple Vision Pro | **Never tested.** No device has run this app |
+| Runs on a Vision Pro | **Yes.** Real engine, real game data (yours, never bundled), campaign mission `MD_USA01` playable. Engine about 15–28 fps, display 90 fps |
+| Tabletop | A square 1.1 m × 1.1 m stereo miniature battlefield, 1.25 m in front of you; move, turn and resize it; recenter button |
+| Control bar | The game's own control bar lies in front of the table like a console; mission text and dialogs stand behind the far edge |
+| Look + pinch | Select units, order moves and attacks, pinch-drag to box select, drag the table edge to pan, both hands to zoom. Aim assist, a hand nudge to correct a pick, and colour previews (cyan select, green move, red attack) |
+| Gaze highlight | Each unit is a visionOS tracking area: the system highlights what you look at and names it in the pinch (new, still being tuned) |
+| Buttons | A small controls strip (stop, attack-move, guard, scatter, all units, deselect, zoom, groups 1–5) and a regrouped Commands window |
+| Ground View | Walk the battlefield at human scale |
+| Not yet | Skirmish setup, save/load, audio check, multiplayer, anything on the App Store |
 
 The complete, evidence-backed list of every feature is in
 [docs/VISIONOS_TEST_MATRIX.md](docs/VISIONOS_TEST_MATRIX.md) — read it before believing any summary here, including
@@ -32,6 +47,14 @@ The complete, evidence-backed list of every feature and its status is in
 [docs/VISIONOS_TEST_MATRIX.md](docs/VISIONOS_TEST_MATRIX.md). The design, decisions and risks are in
 [docs/VISIONOS_PORT_ARCHITECTURE.md](docs/VISIONOS_PORT_ARCHITECTURE.md). Nothing in this file should be read as a promise
 of a release date or of feature parity with the Quest edition.
+
+## Possible improvements (from the first headset sessions)
+
+1. **Put the table on your real table.** Today it floats at a fixed height and can sink into or hover over real furniture (see the screenshots). ARKit plane detection could snap it to the table surface and match its height.
+2. **Faster engine.** 15–28 fps on a full CPU core: the display fills the gaps by reprojection, which is what makes tall units shimmer. Profile the engine thread; send real per-pixel depth instead of the table-plane depth.
+3. **Readable pop-ups.** Tooltips, the score screen and mission text appear as small dark panels floating in the room. Draw them as native windows or larger panels near the table.
+4. **Controls strip placement.** It opens beside where the launcher was, sometimes on a far wall. Place it next to the near edge of the table.
+5. **Ground View polish.** It works, but textures look soft at human scale and there is no minimap or exit hint in view.
 
 ## What you need
 
