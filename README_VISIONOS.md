@@ -1,7 +1,7 @@
 # Generals: Zero Hour XR for Apple Vision Pro (visionOS port, early development)
 
 An unofficial, community effort to bring the tabletop edition of *Command & Conquer: Generals – Zero Hour* to Apple Vision Pro
-as a native visionOS app. The Meta Quest 3 edition described in the main [README.md](README.md) remains the supported
+as a native visionOS app. The Meta Quest 3 edition this builds on is described in [README_QUEST.md](README_QUEST.md); it remains a separate
 release; this file covers the visionOS work only. This is not an Electronic Arts product and is not endorsed by EA.
 
 ![The square tabletop battlefield on a real table, seen through Apple Vision Pro](docs/media/visionos/headset-45.jpg)
