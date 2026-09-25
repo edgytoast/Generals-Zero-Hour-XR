@@ -1340,7 +1340,9 @@ void GX_XR_BeginStereoWorld() {
 	}
 #endif
 	s_renderReady=d3d8gles_BeginXRStereo(s_worldFrame.width,s_worldFrame.height,clip[0],clip[1],board,
-		s_worldFrame.observer ? -1.0f:float(h)/w,camera,s_worldFrame.atlasStereo,s_worldFrame.multiviewStereo);
+		// GeneralsX @bugfix visionOS 25/09/2026 Clip to the board the mapping describes (square on visionOS), not the 16:9
+		// viewport: with h/w the square table kept a textured 16:9 band and an empty rest.
+		s_worldFrame.observer ? -1.0f:s_worldAspect,camera,s_worldFrame.atlasStereo,s_worldFrame.multiviewStereo);
 }
 static void drawXrWorldDecorations();
 void GX_XR_EndStereoWorld() {
